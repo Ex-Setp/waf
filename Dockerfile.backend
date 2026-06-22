@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+
+FROM golang:1.25-bookworm AS builder
+
+ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+ENV GOSUMDB=off
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/aegis-waf ./cmd/aegis-waf/main.go
+
+FROM alpine:3.19 AS runtime
+RUN mkdir -p /app/data
+
+RUN apk --no-cache add ca-certificates
+
+# 关键：在镜像中创建 /app/data 目录
+RUN mkdir -p /app/data /app/rules /app/configs
+
+COPY --from=builder /app/aegis-waf /app/aegis-waf
+
+WORKDIR /app
+
+# 启动前再次确保目录存在（双重保险）
+CMD mkdir -p /app/data && /app/aegis-waf

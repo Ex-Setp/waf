@@ -1,0 +1,53 @@
+server:
+  host: 0.0.0.0
+  port: 8088
+  mode: release
+  tls:
+    enabled: false
+    port: 8443
+    acme:
+      enabled: false
+      email: ""
+      cacheDir: /app/data/acme
+      directory: https://acme-v02.api.letsencrypt.org/directory
+      acceptTOS: false
+      httpPort: 80
+      domains: []
+
+
+dataplane:
+  enabled: false
+  mode: mock
+  interfaceName: ""
+  xdpObjectPath: ""
+  xdpProgramName: ""
+  failOpen: true
+
+security:
+  maxBodySize: 10485760
+  enableSemantic: true
+  enableXDP: false
+
+database:
+  driver: sqlite
+  dsn: /app/data/aegis-waf.db
+
+logging:
+  level: info
+  format: json
+
+rules:
+  directory: /app/rules
+  customFiles: []
+  disabledRuleIDs: []
+  autoReload: true
+
+crs:
+  enabled: false
+  rulesDir: /app/rules/crs
+  paranoiaLevel: 1
+  inboundThreshold: 5
+  outboundThreshold: 4
+  requestBodyLimit: 10485760
+  auditLogEnabled: false
+  failOpen: true

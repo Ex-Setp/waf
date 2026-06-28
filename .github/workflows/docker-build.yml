@@ -5,14 +5,12 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-# 消除 Node 版本废弃警告
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

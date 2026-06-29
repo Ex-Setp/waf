@@ -219,6 +219,7 @@ func explanationJSON(site *gateway.SiteRuntime, req pipeline.Request, result pip
 		SiteName            string   `json:"siteName"`
 		PolicyMode          string   `json:"policyMode"`
 		BlockScoreThreshold int      `json:"blockScoreThreshold"`
+		RuntimeVersion      string   `json:"runtimeVersion,omitempty"`
 		RuleGroups          []string `json:"ruleGroups,omitempty"`
 	}
 	type matchedRuleInfo struct {
@@ -260,7 +261,7 @@ func explanationJSON(site *gateway.SiteRuntime, req pipeline.Request, result pip
 	}
 	exp := explanation{MatchedRules: []matchedRuleInfo{}, RequestVariables: []requestVariableInfo{}, NormalizationSteps: []normalizationStepInfo{}, WhitelistDecision: decisionInfo{Status: "not_matched"}, CCBotDecision: decisionInfo{Status: "not_matched"}, SemanticDecision: decisionInfo{Status: "not_matched"}, FinalAction: finalAction, Reason: result.Reason}
 	if site != nil {
-		exp.SitePolicy = sitePolicyInfo{SiteID: site.ID, SiteName: site.Name, PolicyMode: site.PolicyMode, BlockScoreThreshold: site.BlockScoreThreshold, RuleGroups: site.RuleGroups}
+		exp.SitePolicy = sitePolicyInfo{SiteID: site.ID, SiteName: site.Name, PolicyMode: site.PolicyMode, BlockScoreThreshold: site.BlockScoreThreshold, RuntimeVersion: site.RuntimeVersion, RuleGroups: site.RuleGroups}
 	}
 	for _, match := range result.Detection.Matches {
 		exp.MatchedRules = append(exp.MatchedRules, matchedRuleInfo{ID: match.ID, Source: match.Source, Group: match.Group, Severity: match.Severity, Score: match.Score, Action: string(match.Action), Message: match.Message, Evidence: match.Evidence})

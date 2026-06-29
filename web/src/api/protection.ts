@@ -1,4 +1,5 @@
 import http from './http'
+import type { PolicyMode } from './sites'
 
 export interface ApiListResponse<T> {
   items?: T[]
@@ -15,7 +16,7 @@ export interface ApiListResponse<T> {
 export interface SiteProtectionPolicy {
   siteId: number | string
   siteName?: string
-  mode?: string
+  mode?: PolicyMode
   enabledRuleGroups?: string[]
   ruleGroups?: string[]
   crsParanoiaLevel?: number

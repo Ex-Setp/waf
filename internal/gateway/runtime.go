@@ -30,6 +30,7 @@ type SiteRuntime struct {
 	PolicyMode          string
 	BlockScoreThreshold int
 	RuleGroups          []string
+	RuntimeVersion      string
 	Proxy               *httputil.ReverseProxy
 }
 
@@ -117,13 +118,21 @@ func FromSite(site database.Site) (*SiteRuntime, error) {
 		return nil, fmt.Errorf("invalid upstream for site %d: %s", site.ID, site.Upstream)
 	}
 	domains := site.Domains()
-	policyMode := site.PolicyMode
-	if policyMode == "" {
+	policyMode, ok := database.NormalizePolicyMode(site.PolicyMode)
+	if !ok {
 		policyMode = database.PolicyModeStandard
 	}
+	defaults, _ := database.PolicyModeDefaultsFor(policyMode)
 	threshold := site.BlockScoreThreshold
 	if threshold <= 0 {
-		threshold = defaultThresholdForPolicyMode(policyMode)
+		threshold = defaults.BlockScoreThreshold
+	}
+	ruleGroups := site.RuleGroups()
+	if policyMode != database.PolicyModeCustom {
+		// Productized modes expose default rule groups in API responses, but runtime
+		// must not filter CRS/seed rules by group because many legacy rules do not
+		// carry explicit group metadata. Custom mode remains the scoped filter mode.
+		ruleGroups = nil
 	}
 	return &SiteRuntime{
 		ID:                  site.ID,
@@ -133,14 +142,15 @@ func FromSite(site database.Site) (*SiteRuntime, error) {
 		UpstreamRaw:         site.Upstream,
 		Status:              site.Status,
 		WAFEnabled:          site.WAFEnabled,
-		CCProtection:        site.CCProtection || policyMode == database.PolicyModeStrict,
+		CCProtection:        site.CCProtection,
 		CertificateID:       site.CertificateID,
 		CertificateName:     site.CertificateName,
 		TLSMode:             site.TLSMode,
-		SemanticProtection:  site.SemanticProtection || policyMode == database.PolicyModeStrict || policyMode == database.PolicyModeObserve && false,
+		SemanticProtection:  site.SemanticProtection,
 		PolicyMode:          policyMode,
 		BlockScoreThreshold: threshold,
-		RuleGroups:          site.RuleGroups(),
+		RuleGroups:          ruleGroups,
+		RuntimeVersion:      fmt.Sprintf("site-%d-%d", site.ID, site.UpdatedAt),
 		Proxy:               proxy.NewReverseProxy(upstream),
 	}, nil
 }
@@ -156,17 +166,4 @@ func NormalizeHost(host string) string {
 		}
 	}
 	return strings.Trim(host, ".")
-}
-
-func defaultThresholdForPolicyMode(mode string) int {
-	switch mode {
-	case database.PolicyModeObserve:
-		return 100
-	case database.PolicyModeLoose:
-		return 100
-	case database.PolicyModeStrict:
-		return 5
-	default:
-		return 7
-	}
 }

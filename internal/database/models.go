@@ -1,6 +1,9 @@
 package database
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 const (
 	SiteStatusEnabled  = "enabled"
@@ -33,6 +36,46 @@ const (
 	PolicyModeStrict   = "strict"
 	PolicyModeCustom   = "custom"
 )
+
+type PolicyModeDefaults struct {
+	Mode                string
+	RuleGroups          []string
+	BlockScoreThreshold int
+	SemanticProtection  bool
+	CCProtection        bool
+	DefaultAction       string
+}
+
+func NormalizePolicyMode(mode string) (string, bool) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case PolicyModeObserve, PolicyModeLoose, PolicyModeStandard, PolicyModeStrict, PolicyModeCustom:
+		return mode, true
+	case "":
+		return PolicyModeStandard, true
+	default:
+		return "", false
+	}
+}
+
+func PolicyModeDefaultsFor(mode string) (PolicyModeDefaults, bool) {
+	mode, ok := NormalizePolicyMode(mode)
+	if !ok {
+		return PolicyModeDefaults{}, false
+	}
+	switch mode {
+	case PolicyModeObserve:
+		return PolicyModeDefaults{Mode: mode, RuleGroups: []string{"custom"}, BlockScoreThreshold: 100, DefaultAction: "observe"}, true
+	case PolicyModeLoose:
+		return PolicyModeDefaults{Mode: mode, RuleGroups: []string{"custom"}, BlockScoreThreshold: 100, DefaultAction: "observe"}, true
+	case PolicyModeStrict:
+		return PolicyModeDefaults{Mode: mode, RuleGroups: []string{"custom", "sqli", "xss", "semantic"}, BlockScoreThreshold: 5, SemanticProtection: true, CCProtection: true, DefaultAction: "block"}, true
+	case PolicyModeCustom:
+		return PolicyModeDefaults{Mode: mode, RuleGroups: []string{"custom"}, BlockScoreThreshold: 7, DefaultAction: "observe"}, true
+	default:
+		return PolicyModeDefaults{Mode: mode, RuleGroups: []string{"custom", "sqli", "xss", "semantic"}, BlockScoreThreshold: 7, SemanticProtection: true, DefaultAction: "block"}, true
+	}
+}
 
 type Site struct {
 	ID                  uint   `gorm:"primaryKey" json:"id"`

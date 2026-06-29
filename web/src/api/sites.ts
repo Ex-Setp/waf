@@ -2,7 +2,7 @@ import http from './http'
 
 export type SiteStatus = 'enabled' | 'disabled'
 export type TlsMode = 'off' | 'auto' | 'custom'
-export type PolicyMode = 'loose' | 'standard' | 'strict'
+export type PolicyMode = 'observe' | 'loose' | 'standard' | 'strict' | 'custom'
 export type ListenerProtocol = 'http' | 'https'
 export type ListenerStatus = 'listening' | 'error' | 'not-mapped' | 'disabled'
 

@@ -755,6 +755,10 @@ func (s *Server) handleSitesAPI(w http.ResponseWriter, r *http.Request, suffix s
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
 			return
 		}
+		if _, err := validatePolicyMode(payload.PolicyMode); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+			return
+		}
 		site, err := payload.toSite(0)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
@@ -782,6 +786,12 @@ func (s *Server) handleSitesAPI(w http.ResponseWriter, r *http.Request, suffix s
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
 			return
+		}
+		if strings.TrimSpace(payload.PolicyMode) != "" {
+			if _, err := validatePolicyMode(payload.PolicyMode); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+				return
+			}
 		}
 		updated, err := payload.merge(existing)
 		if err != nil {
@@ -888,15 +898,19 @@ func idString(id uint) string {
 }
 
 func normalizePolicyMode(mode string) string {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	switch mode {
-	case database.PolicyModeObserve, database.PolicyModeLoose, database.PolicyModeStandard, database.PolicyModeStrict, database.PolicyModeCustom:
-		return mode
-	case "":
-		return database.PolicyModeStandard
-	default:
+	normalized, ok := database.NormalizePolicyMode(mode)
+	if !ok {
 		return database.PolicyModeStandard
 	}
+	return normalized
+}
+
+func validatePolicyMode(mode string) (string, error) {
+	normalized, ok := database.NormalizePolicyMode(mode)
+	if !ok {
+		return "", fmt.Errorf("invalid policyMode")
+	}
+	return normalized, nil
 }
 
 func policyModeDescription(mode string) string {
@@ -916,19 +930,12 @@ func policyModeDescription(mode string) string {
 	}
 }
 
-func policyModeDefaults(mode string) (threshold int, ccEnabled bool, semanticEnabled bool, defaultAction string) {
-	switch normalizePolicyMode(mode) {
-	case database.PolicyModeObserve:
-		return 100, false, false, "observe"
-	case database.PolicyModeLoose:
-		return 100, false, false, "observe"
-	case database.PolicyModeStrict:
-		return 5, true, true, "block"
-	case database.PolicyModeCustom:
-		return 7, false, false, "observe"
-	default:
-		return 7, false, false, "block"
+func policyModeDefaults(mode string) database.PolicyModeDefaults {
+	defaults, ok := database.PolicyModeDefaultsFor(mode)
+	if !ok {
+		defaults, _ = database.PolicyModeDefaultsFor(database.PolicyModeStandard)
 	}
+	return defaults
 }
 
 func (s *Server) applyPolicyDefaults(site *database.Site) {
@@ -936,17 +943,17 @@ func (s *Server) applyPolicyDefaults(site *database.Site) {
 		return
 	}
 	mode := normalizePolicyMode(site.PolicyMode)
-	threshold, _, _, _ := policyModeDefaults(mode)
+	defaults := policyModeDefaults(mode)
 	site.PolicyMode = mode
 	if site.BlockScoreThreshold <= 0 || mode != database.PolicyModeCustom {
-		site.BlockScoreThreshold = threshold
+		site.BlockScoreThreshold = defaults.BlockScoreThreshold
 	}
-	if mode == database.PolicyModeStrict {
-		site.CCProtection = true
-		site.SemanticProtection = true
-	} else if mode == database.PolicyModeObserve || mode == database.PolicyModeLoose {
-		site.CCProtection = false
-		site.SemanticProtection = false
+	if mode != database.PolicyModeCustom {
+		site.CCProtection = defaults.CCProtection
+		site.SemanticProtection = defaults.SemanticProtection
+		_ = site.SetRuleGroups(defaults.RuleGroups)
+	} else if len(site.RuleGroups()) == 0 {
+		_ = site.SetRuleGroups(defaults.RuleGroups)
 	}
 	if site.Status == "" {
 		site.Status = database.SiteStatusEnabled
@@ -1297,7 +1304,8 @@ func (s *Server) listSiteProtectionPolicies(ctx context.Context) siteProtectionP
 		policy, err := s.siteProtectionPolicyForSite(ctx, site.ID)
 		if err != nil {
 			groups := site.RuleGroups()
-			policies = append(policies, siteProtectionPolicy{SiteID: fmt.Sprintf("%d", site.ID), SiteName: site.Name, Mode: normalizePolicyMode(site.PolicyMode), EnabledRuleGroups: groups, RuleGroups: groups, CRSParanoiaLevel: 1, InboundThreshold: site.BlockScoreThreshold, OutboundThreshold: site.BlockScoreThreshold, DefaultAction: "block", RuntimeVersion: "runtime", PublishedAt: formatMillis(site.UpdatedAt), UpdatedAt: formatMillis(site.UpdatedAt)})
+			defaults := policyModeDefaults(site.PolicyMode)
+			policies = append(policies, siteProtectionPolicy{SiteID: fmt.Sprintf("%d", site.ID), SiteName: site.Name, Mode: defaults.Mode, EnabledRuleGroups: groups, RuleGroups: groups, CRSParanoiaLevel: 1, InboundThreshold: site.BlockScoreThreshold, OutboundThreshold: site.BlockScoreThreshold, DefaultAction: defaults.DefaultAction, RuntimeVersion: fmt.Sprintf("site-%d-%d", site.ID, site.UpdatedAt), PublishedAt: formatMillis(site.UpdatedAt), UpdatedAt: formatMillis(site.UpdatedAt)})
 			continue
 		}
 		policies = append(policies, policy)
@@ -1319,11 +1327,12 @@ func (s *Server) siteProtectionPolicyForSite(ctx context.Context, siteID uint) (
 
 func (s *Server) defaultSiteProtectionPolicy(site database.Site) database.SiteProtectionPolicy {
 	mode := normalizePolicyMode(site.PolicyMode)
+	defaults := policyModeDefaults(mode)
 	threshold := site.BlockScoreThreshold
 	if threshold <= 0 {
-		threshold = defaultThresholdForPolicyMode(mode)
+		threshold = defaults.BlockScoreThreshold
 	}
-	policy := database.SiteProtectionPolicy{SiteID: site.ID, SiteName: site.Name, Mode: mode, CRSParanoiaLevel: 1, InboundThreshold: threshold, OutboundThreshold: threshold, DefaultAction: "block", RuntimeVersion: "runtime", PublishedAt: site.UpdatedAt}
+	policy := database.SiteProtectionPolicy{SiteID: site.ID, SiteName: site.Name, Mode: mode, CRSParanoiaLevel: 1, InboundThreshold: threshold, OutboundThreshold: threshold, DefaultAction: defaults.DefaultAction, RuntimeVersion: fmt.Sprintf("site-%d-%d", site.ID, site.UpdatedAt), PublishedAt: site.UpdatedAt}
 	_ = policy.SetEnabledRuleGroups(normalizeRuleGroups(site.RuleGroups()))
 	return policy
 }
@@ -1339,7 +1348,9 @@ func (s *Server) saveSiteProtectionPolicyDraft(ctx context.Context, siteID uint,
 	}
 	policy := s.defaultSiteProtectionPolicy(site)
 	_ = s.db.WithContext(ctx).Where("site_id = ?", siteID).First(&policy).Error
-	applySiteProtectionPolicyPayload(&policy, payload)
+	if err := applySiteProtectionPolicyPayload(&policy, payload); err != nil {
+		return siteProtectionPolicy{}, err
+	}
 	policy.SiteID = site.ID
 	policy.SiteName = site.Name
 	if err := s.db.WithContext(ctx).Where("site_id = ?", siteID).Save(&policy).Error; err != nil {
@@ -1348,12 +1359,19 @@ func (s *Server) saveSiteProtectionPolicyDraft(ctx context.Context, siteID uint,
 	return sitePolicyToAPI(policy), nil
 }
 
-func applySiteProtectionPolicyPayload(policy *database.SiteProtectionPolicy, payload siteProtectionPolicyPayload) {
-	mode := normalizePolicyMode(payload.Mode)
+func applySiteProtectionPolicyPayload(policy *database.SiteProtectionPolicy, payload siteProtectionPolicyPayload) error {
+	mode, err := validatePolicyMode(payload.Mode)
+	if err != nil {
+		return err
+	}
+	defaults := policyModeDefaults(mode)
 	policy.Mode = mode
 	groups := payload.EnabledRuleGroups
 	if len(groups) == 0 {
 		groups = payload.RuleGroups
+	}
+	if mode != database.PolicyModeCustom || len(groups) == 0 {
+		groups = defaults.RuleGroups
 	}
 	_ = policy.SetEnabledRuleGroups(normalizeRuleGroups(groups))
 	if payload.CRSParanoiaLevel > 0 {
@@ -1361,17 +1379,26 @@ func applySiteProtectionPolicyPayload(policy *database.SiteProtectionPolicy, pay
 	} else if policy.CRSParanoiaLevel <= 0 {
 		policy.CRSParanoiaLevel = 1
 	}
-	if payload.InboundThreshold > 0 {
+	if mode != database.PolicyModeCustom {
+		policy.InboundThreshold = defaults.BlockScoreThreshold
+	} else if payload.InboundThreshold > 0 {
 		policy.InboundThreshold = payload.InboundThreshold
 	} else if policy.InboundThreshold <= 0 {
-		policy.InboundThreshold = defaultThresholdForPolicyMode(mode)
+		policy.InboundThreshold = defaults.BlockScoreThreshold
 	}
-	if payload.OutboundThreshold > 0 {
+	if mode != database.PolicyModeCustom {
+		policy.OutboundThreshold = policy.InboundThreshold
+	} else if payload.OutboundThreshold > 0 {
 		policy.OutboundThreshold = payload.OutboundThreshold
 	} else if policy.OutboundThreshold <= 0 {
 		policy.OutboundThreshold = policy.InboundThreshold
 	}
-	policy.DefaultAction = normalizePolicyAction(payload.DefaultAction)
+	if mode != database.PolicyModeCustom || strings.TrimSpace(payload.DefaultAction) == "" {
+		policy.DefaultAction = defaults.DefaultAction
+	} else {
+		policy.DefaultAction = normalizePolicyAction(payload.DefaultAction)
+	}
+	return nil
 }
 
 func normalizePolicyAction(action string) string {
@@ -1392,17 +1419,26 @@ func (s *Server) publishSiteProtectionPolicy(ctx context.Context, siteID uint) (
 	_ = s.db.WithContext(ctx).Where("site_id = ?", siteID).First(&policy).Error
 	policy.SiteID = site.ID
 	policy.SiteName = site.Name
-	policy.Mode = normalizePolicyMode(policy.Mode)
-	if policy.InboundThreshold <= 0 {
-		policy.InboundThreshold = defaultThresholdForPolicyMode(policy.Mode)
+	if _, err := validatePolicyMode(policy.Mode); err != nil {
+		return siteProtectionPolicy{}, err
 	}
-	if policy.OutboundThreshold <= 0 {
+	policy.Mode = normalizePolicyMode(policy.Mode)
+	defaults := policyModeDefaults(policy.Mode)
+	if policy.Mode != database.PolicyModeCustom || policy.InboundThreshold <= 0 {
+		policy.InboundThreshold = defaults.BlockScoreThreshold
+	}
+	if policy.Mode != database.PolicyModeCustom || policy.OutboundThreshold <= 0 {
 		policy.OutboundThreshold = policy.InboundThreshold
 	}
 	if policy.CRSParanoiaLevel <= 0 {
 		policy.CRSParanoiaLevel = 1
 	}
-	policy.DefaultAction = normalizePolicyAction(policy.DefaultAction)
+	if policy.Mode != database.PolicyModeCustom {
+		policy.DefaultAction = defaults.DefaultAction
+		_ = policy.SetEnabledRuleGroups(defaults.RuleGroups)
+	} else {
+		policy.DefaultAction = normalizePolicyAction(policy.DefaultAction)
+	}
 	now := time.Now().UnixMilli()
 	version := fmt.Sprintf("v%d", time.Now().UnixNano())
 	policy.RuntimeVersion = version
@@ -1454,14 +1490,19 @@ func (s *Server) rollbackSiteProtectionPolicy(ctx context.Context, siteID uint, 
 
 func (s *Server) applyPublishedPolicyToSite(ctx context.Context, site *database.Site, policy database.SiteProtectionPolicy) error {
 	site.PolicyMode = normalizePolicyMode(policy.Mode)
+	defaults := policyModeDefaults(site.PolicyMode)
 	site.BlockScoreThreshold = policy.InboundThreshold
-	if site.BlockScoreThreshold <= 0 {
-		site.BlockScoreThreshold = defaultThresholdForPolicyMode(site.PolicyMode)
+	if site.PolicyMode != database.PolicyModeCustom || site.BlockScoreThreshold <= 0 {
+		site.BlockScoreThreshold = defaults.BlockScoreThreshold
 	}
 	site.WAFEnabled = normalizePolicyAction(policy.DefaultAction) != "allow"
-	site.CCProtection = site.PolicyMode == database.PolicyModeStrict
-	site.SemanticProtection = site.PolicyMode != database.PolicyModeLoose
-	if err := site.SetRuleGroups(policy.EnabledRuleGroups()); err != nil {
+	site.CCProtection = defaults.CCProtection
+	site.SemanticProtection = defaults.SemanticProtection
+	groups := policy.EnabledRuleGroups()
+	if site.PolicyMode != database.PolicyModeCustom || len(groups) == 0 {
+		groups = defaults.RuleGroups
+	}
+	if err := site.SetRuleGroups(normalizeRuleGroups(groups)); err != nil {
 		return err
 	}
 	if s.sites != nil {
@@ -2334,8 +2375,7 @@ func normalizeRuleGroups(groups []string) []string {
 	return out
 }
 func defaultThresholdForPolicyMode(mode string) int {
-	threshold, _, _, _ := policyModeDefaults(mode)
-	return threshold
+	return policyModeDefaults(mode).BlockScoreThreshold
 }
 func boolDefault(value *bool, fallback bool) bool {
 	if value == nil {

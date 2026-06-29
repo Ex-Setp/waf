@@ -640,16 +640,11 @@ func applySitePolicy(site *gateway.SiteRuntime, req *pipeline.Request) {
 	req.SemanticProtection = site.SemanticProtection
 	req.SemanticPolicySet = true
 	if req.BlockScoreThreshold <= 0 {
-		switch site.PolicyMode {
-		case database.PolicyModeLoose:
-			req.BlockScoreThreshold = 100
-		case database.PolicyModeStrict:
-			req.BlockScoreThreshold = 5
-		default:
-			req.BlockScoreThreshold = 7
+		if defaults, ok := database.PolicyModeDefaultsFor(site.PolicyMode); ok {
+			req.BlockScoreThreshold = defaults.BlockScoreThreshold
 		}
 	}
-	req.ForceSemantic = site.PolicyMode != database.PolicyModeLoose && site.SemanticProtection
+	req.ForceSemantic = site.SemanticProtection
 }
 
 func ruleGroupsMap(groups []string) map[string]bool {

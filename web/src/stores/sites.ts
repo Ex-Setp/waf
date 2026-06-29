@@ -107,10 +107,17 @@ export const useSitesStore = defineStore('sites', () => {
     saving.value = true
     error.value = ''
     try {
+      let saved: ProtectedSite
       if (id) {
-        await updateSite(id, payload)
+        saved = await updateSite(id, payload)
       } else {
-        await createSite(payload)
+        saved = await createSite(payload)
+      }
+      const index = sites.value.findIndex((site) => site.id === saved.id)
+      if (index >= 0) {
+        sites.value.splice(index, 1, saved)
+      } else {
+        sites.value.push(saved)
       }
       await refreshAll()
     } catch (err) {

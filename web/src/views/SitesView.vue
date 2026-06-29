@@ -121,13 +121,14 @@ function protectionStatusText(site: ProtectedSite): string {
 }
 
 function policyModeText(mode: PolicyMode): string {
-  const map: Record<PolicyMode, string> = { loose: '宽松', standard: '标准', strict: '严格' }
+  const map: Record<PolicyMode, string> = { observe: '观察', loose: '宽松', standard: '标准', strict: '严格', custom: '自定义' }
   return map[mode]
 }
 
-function policyModeType(mode: PolicyMode): 'info' | 'success' | 'danger' {
-  if (mode === 'loose') return 'info'
+function policyModeType(mode: PolicyMode): 'info' | 'success' | 'danger' | 'warning' {
+  if (mode === 'observe' || mode === 'loose') return 'info'
   if (mode === 'strict') return 'danger'
+  if (mode === 'custom') return 'warning'
   return 'success'
 }
 
@@ -206,7 +207,7 @@ async function handleToggle(site: ProtectedSite): Promise<void> {
 
 async function handleDelete(site: ProtectedSite): Promise<void> {
   try {
-    await ElMessageBox.confirm(`确认删除站点「${site.name}」吗？`, '删除站点', {
+    await ElMessageBox.confirm(`确认删除站点“${site.name}”吗？`, '删除站点', {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消',
@@ -344,6 +345,18 @@ async function handleDelete(site: ProtectedSite): Promise<void> {
           <el-select v-model="form.certificateId" clearable filterable style="width: 100%" placeholder="选择证书">
             <el-option v-for="cert in certificatesStore.certificates" :key="cert.id" :label="cert.name" :value="cert.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="Policy mode">
+          <el-select v-model="form.policyMode" style="width: 100%">
+            <el-option label="Observe" value="observe" />
+            <el-option label="Loose" value="loose" />
+            <el-option label="Standard" value="standard" />
+            <el-option label="Strict" value="strict" />
+            <el-option label="Custom" value="custom" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Block score">
+          <el-input-number v-model="form.blockScoreThreshold" :min="1" :max="100" :disabled="form.policyMode !== 'custom'" />
         </el-form-item>
       </el-form>
       <template #footer>

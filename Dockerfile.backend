@@ -1,0 +1,22 @@
+FROM golang:1.25-bookworm AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go env -w GOPROXY=https://goproxy.cn,direct
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/aegis-waf ./cmd/aegis-waf/main.go
+
+FROM debian:bookworm-slim AS runtime
+
+# 不执行 apt-get update，直接用本地镜像自带的 ca-certificates
+RUN mkdir -p /app/data
+WORKDIR /app
+
+COPY --from=builder /app/aegis-waf .
+COPY --from=builder /app/rules ./rules
+
+EXPOSE 8080
+ENTRYPOINT ["./aegis-waf"]
+CMD ["--config", "configs/config.docker.yaml"]

@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: aegis-waf-backend:v1
+    container_name: aegis-waf-backend
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+      - ./rules:/app/rules
+      - ./configs/config.docker.yaml:/app/configs/config.docker.yaml:ro
+    environment:
+      TZ: Asia/Shanghai
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: aegis-waf-frontend:v1
+    container_name: aegis-waf-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8088:80"

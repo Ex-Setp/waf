@@ -1,0 +1,20 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "production"
+  tls:
+    enabled: false
+    port: 8443
+    acme:
+      enabled: false
+
+database:
+  driver: "sqlite"
+  dsn: "/app/data/waf.db"
+
+logging:
+  level: "info"
+  format: "json"
+
+control:
+  enabled: false

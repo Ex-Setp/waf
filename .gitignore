@@ -1,0 +1,36 @@
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+coverage.out
+.gocache/
+.gomodcache/
+.gopath/
+.gotmp/
+.tmp/
+.idea/
+.vscode/
+.DS_Store
+
+# Runtime/local data
+*.log
+data/*.db
+data/*.db-*
+cmd/aegis-waf/data/
+tmp_safeline/
+
+# Docker/build output noise
+\[backend
+\[builder
+CACHED
+ERROR
+*.bak
+*.bak.*
+
+# Frontend generated artifacts
+web/node_modules/
+web/dist/
+node_modules/
+dist/

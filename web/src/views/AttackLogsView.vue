@@ -3,7 +3,7 @@ import { Download, Link, Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 
-import { applyWhitelistSuggestion, fetchWhitelistSuggestions, type WhitelistSuggestion } from '@/api/attackLogs'
+import { applyWhitelistSuggestion, fetchWhitelistSuggestions, validateWhitelistSuggestion, type WhitelistSuggestion, type WhitelistValidationResponse } from '@/api/attackLogs'
 import type { AttackAction, AttackExplanation, AttackLogEntry, AttackSeverity, OperatorSuggestion, RequestParserLoggedExplanation, RequestParserLoggedSnippet, ScoreBreakdown } from '@/api/attackLogs'
 import { useAttackLogsStore } from '@/stores/attackLogs'
 
@@ -23,6 +23,7 @@ const attackLogsStore = useAttackLogsStore()
 const detailVisible = ref(false)
 const currentLog = ref<AttackLogEntry | null>(null)
 const whitelistLoading = ref(false)
+const whitelistValidation = ref<WhitelistValidationResponse | null>(null)
 const whitelistSuggestions = ref<WhitelistSuggestion[]>([])
 const filters = reactive<AttackLogFilters>({
   timeRange: [],
@@ -94,6 +95,7 @@ async function openDetail(row: AttackLogEntry): Promise<void> {
   currentLog.value = row
   detailVisible.value = true
   whitelistSuggestions.value = []
+  whitelistValidation.value = null
   whitelistLoading.value = true
   try {
     const data = await fetchWhitelistSuggestions(row.id)
@@ -115,6 +117,19 @@ async function handleApplyWhitelist(suggestion: WhitelistSuggestion): Promise<vo
     whitelistSuggestions.value = data.suggestions ?? []
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '生成白名单失败')
+  } finally {
+    whitelistLoading.value = false
+  }
+}
+
+async function handleValidateWhitelist(): Promise<void> {
+  if (!currentLog.value) return
+  whitelistLoading.value = true
+  try {
+    whitelistValidation.value = await validateWhitelistSuggestion(currentLog.value.id)
+    ElMessage.success('已重放同类请求验证白名单效果')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '验证白名单失败')
   } finally {
     whitelistLoading.value = false
   }
@@ -484,9 +499,14 @@ function display(value: string | number | undefined | null): string | number {
                 <strong>{{ ruleTypeText(item.type) }}</strong>
                 <code>{{ item.value }}</code>
                 <p>{{ item.description }}</p>
+                <p v-if="item.scope || item.path || item.expiresAt">范围：{{ item.scope || 'site' }} <span v-if="item.path">· {{ item.path }}</span> <span v-if="item.expiresAt">· 过期 {{ item.expiresAt }}</span></p>
               </div>
-              <el-button type="primary" size="small" @click="handleApplyWhitelist(item)">生成规则</el-button>
+              <div class="whitelist-actions">
+                <el-button size="small" @click="handleValidateWhitelist">验证效果</el-button>
+                <el-button type="primary" size="small" @click="handleApplyWhitelist(item)">生成规则</el-button>
+              </div>
             </div>
+            <el-alert v-if="whitelistValidation" type="success" :closable="false" show-icon :title="`验证结果：${whitelistValidation.beforeDecision} -> ${whitelistValidation.afterDecision} (${whitelistValidation.equivalentStatus})`" :description="whitelistValidation.reason || '同类请求将命中白名单/例外'" />
           </div>
         </div>
       </div>
@@ -504,5 +524,6 @@ function display(value: string | number | undefined | null): string | number {
 .whitelist-suggestion-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; border: 1px solid var(--el-border-color-light); border-radius: 8px; background: rgba(255,255,255,0.03); }
 .whitelist-suggestion-item code { display: inline-block; margin-left: 8px; color: var(--el-color-primary); }
 .whitelist-suggestion-item p { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 12px; }
+.whitelist-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .explanation-panel { display: grid; gap: 12px; }
 </style>

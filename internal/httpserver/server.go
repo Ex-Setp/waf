@@ -621,6 +621,9 @@ func ruleAppliesToRequest(rule database.AccessRule, siteID uint, requestPath str
 func pathMatchesRequest(requestPath, pattern string) bool {
 	requestPath = strings.Split(requestPath, "?")[0]
 	pattern = strings.TrimSpace(pattern)
+	if idx := strings.Index(pattern, "|"); idx >= 0 {
+		pattern = strings.TrimSpace(pattern[:idx])
+	}
 	if pattern == "" {
 		return false
 	}

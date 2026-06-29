@@ -130,6 +130,8 @@ export interface WhitelistSuggestion {
   scope?: string
   ruleId?: string
   variable?: string
+  siteId?: string
+  path?: string
   expiresAt?: string
 }
 
@@ -146,6 +148,15 @@ export interface AccessRuleResponse {
   description?: string
 }
 
+export interface WhitelistValidationResponse {
+  attackLogId: string
+  ruleId: string
+  beforeDecision: string
+  afterDecision: string
+  equivalentStatus: string
+  reason: string
+}
+
 export async function fetchWhitelistSuggestions(id: string): Promise<WhitelistSuggestionResponse> {
   const { data } = await http.get<WhitelistSuggestionResponse>(`/attack-logs/${id}/whitelist-suggestions`)
   return data
@@ -159,8 +170,14 @@ export async function applyWhitelistSuggestion(id: string, suggestion: Whitelist
     scope: suggestion.scope,
     ruleId: suggestion.ruleId,
     variable: suggestion.variable,
+    siteId: suggestion.siteId,
     expiresAt: suggestion.expiresAt,
     status: 'enabled',
   })
+  return data
+}
+
+export async function validateWhitelistSuggestion(id: string): Promise<WhitelistValidationResponse> {
+  const { data } = await http.post<WhitelistValidationResponse>(`/attack-logs/${id}/whitelist-validate`)
   return data
 }

@@ -100,6 +100,9 @@ func ipMatches(ip net.IP, value string) bool {
 func pathMatches(requestPath, pattern string) bool {
 	requestPath = strings.Split(requestPath, "?")[0]
 	pattern = strings.TrimSpace(pattern)
+	if idx := strings.Index(pattern, "|"); idx >= 0 {
+		pattern = strings.TrimSpace(pattern[:idx])
+	}
 	if pattern == "" {
 		return false
 	}
@@ -111,6 +114,9 @@ func pathMatches(requestPath, pattern string) bool {
 
 func paramMatches(args map[string][]string, value string) bool {
 	value = strings.TrimSpace(value)
+	if idx := strings.Index(value, "|"); idx >= 0 {
+		value = strings.TrimSpace(value[idx+1:])
+	}
 	if value == "" || len(args) == 0 {
 		return false
 	}

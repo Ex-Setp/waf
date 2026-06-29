@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"aegis-waf/internal/accesscontrol"
 	"aegis-waf/internal/cc"
 	"aegis-waf/internal/database"
 	"aegis-waf/internal/detection"
@@ -203,10 +204,20 @@ type whitelistSuggestion struct {
 	Scope       string `json:"scope,omitempty"`
 	RuleID      string `json:"ruleId,omitempty"`
 	Variable    string `json:"variable,omitempty"`
+	SiteID      string `json:"siteId,omitempty"`
+	Path        string `json:"path,omitempty"`
 	ExpiresAt   string `json:"expiresAt,omitempty"`
 }
 type whitelistSuggestionResponse struct {
 	Suggestions []whitelistSuggestion `json:"suggestions"`
+}
+type whitelistValidationResponse struct {
+	AttackLogID      string `json:"attackLogId"`
+	RuleID           string `json:"ruleId"`
+	BeforeDecision   string `json:"beforeDecision"`
+	AfterDecision    string `json:"afterDecision"`
+	EquivalentStatus string `json:"equivalentStatus"`
+	Reason           string `json:"reason"`
 }
 type whitelistApplyPayload struct {
 	Type        string `json:"type"`
@@ -2839,6 +2850,12 @@ func (s *Server) handleAttackLogActionAPI(w http.ResponseWriter, r *http.Request
 		s.recordAuditEvent(r.Context(), "whitelist_created", log.SiteID, log.SiteName, fmt.Sprintf("access-rule:%d", rule.ID), rule.Type, fmt.Sprintf("from attack log %d: %s", log.ID, rule.Value))
 		s.reloadRuntime(r)
 		writeJSON(w, http.StatusCreated, accessRuleToAPI(rule))
+	case "whitelist-validate":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.validateAttackLogWhitelist(r.Context(), log))
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "attack log action not found"})
 	}
@@ -2847,23 +2864,29 @@ func (s *Server) handleAttackLogActionAPI(w http.ResponseWriter, r *http.Request
 func suggestionsFromAttackLog(log database.AttackLog) []whitelistSuggestion {
 	suggestions := []whitelistSuggestion{}
 	cleanPath := strings.Split(strings.TrimSpace(log.Path), "?")[0]
+	siteID := idString(log.SiteID)
+	expiresAt := defaultWhitelistExpiresAt()
 	if cleanPath != "" {
-		suggestions = append(suggestions, whitelistSuggestion{Type: database.AccessRuleURLWhitelist, Value: cleanPath, Scope: "site", Description: "允许该 URL 跳过检测"})
+		suggestions = append(suggestions, whitelistSuggestion{Type: database.AccessRuleURLWhitelist, Value: cleanPath, Scope: "path", SiteID: siteID, Path: cleanPath, RuleID: log.RuleID, ExpiresAt: expiresAt, Description: "仅当前站点当前路径跳过检测"})
 	}
 	if strings.TrimSpace(log.SourceIP) != "" {
 		typeName := database.AccessRuleIPWhitelist
 		if strings.Contains(log.SourceIP, "/") {
 			typeName = database.AccessRuleCIDRWhitelist
 		}
-		suggestions = append(suggestions, whitelistSuggestion{Type: typeName, Value: log.SourceIP, Scope: "site", Description: "允许该来源 IP/CIDR 跳过检测"})
+		suggestions = append(suggestions, whitelistSuggestion{Type: typeName, Value: log.SourceIP, Scope: "site", SiteID: siteID, RuleID: log.RuleID, ExpiresAt: expiresAt, Description: "仅当前站点允许该来源 IP/CIDR 跳过检测"})
 	}
 	if param := firstQueryParam(log.Path); param != "" {
-		suggestions = append(suggestions, whitelistSuggestion{Type: database.AccessRuleParamWhitelist, Value: param, Scope: "path", Variable: strings.Split(param, "=")[0], Description: "仅在当前路径允许该参数跳过检测"})
+		suggestions = append(suggestions, whitelistSuggestion{Type: database.AccessRuleParamWhitelist, Value: param, Scope: "path", SiteID: siteID, Path: cleanPath, RuleID: log.RuleID, Variable: strings.Split(param, "=")[0], ExpiresAt: expiresAt, Description: "仅当前站点、当前路径、当前参数跳过检测"})
 	}
 	if strings.TrimSpace(log.RuleID) != "" {
-		suggestions = append(suggestions, whitelistSuggestion{Type: database.AccessRuleRuleDisable, Value: log.RuleID, Scope: "path", RuleID: log.RuleID, Variable: firstNonEmpty(log.AttackType, log.Stage), Description: "仅在当前站点/路径禁用命中规则"})
+		suggestions = append(suggestions, whitelistSuggestion{Type: database.AccessRuleRuleDisable, Value: log.RuleID, Scope: "path", SiteID: siteID, Path: cleanPath, RuleID: log.RuleID, Variable: firstNonEmpty(log.AttackType, log.Stage), ExpiresAt: expiresAt, Description: "仅当前站点/路径禁用命中规则"})
 	}
 	return suggestions
+}
+
+func defaultWhitelistExpiresAt() string {
+	return time.Now().Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
 }
 
 func firstQueryParam(pathValue string) string {
@@ -2894,12 +2917,26 @@ func whitelistPayloadToRule(payload whitelistApplyPayload, log database.AttackLo
 			siteID = uint(parsed)
 		}
 	}
-	rule := database.AccessRule{SiteID: siteID, Type: strings.TrimSpace(payload.Type), Value: strings.TrimSpace(payload.Value), Scope: normalizeWhitelistScope(payload.Scope), RuleID: strings.TrimSpace(payload.RuleID), Variable: strings.TrimSpace(payload.Variable), CreatedFrom: firstNonEmpty(logSource(log), "manual"), Description: strings.TrimSpace(payload.Description), Enabled: true}
+	ruleType := strings.TrimSpace(payload.Type)
+	value := strings.TrimSpace(payload.Value)
+	if value == "" {
+		value = defaultWhitelistValue(ruleType, log)
+	}
+	scope := normalizeWhitelistScope(payload.Scope)
+	if log.ID > 0 && scope == "site" && (ruleType == database.AccessRuleURLWhitelist || ruleType == database.AccessRuleParamWhitelist || ruleType == database.AccessRuleRuleDisable) {
+		scope = "path"
+	}
+	rule := database.AccessRule{SiteID: siteID, Type: ruleType, Value: value, Scope: scope, RuleID: strings.TrimSpace(payload.RuleID), Variable: strings.TrimSpace(payload.Variable), CreatedFrom: firstNonEmpty(logSource(log), "manual"), Description: strings.TrimSpace(payload.Description), Enabled: true}
+	pathValue := strings.Split(strings.TrimSpace(log.Path), "?")[0]
+	if rule.Scope == "path" && pathValue != "" && (rule.Type == database.AccessRuleParamWhitelist || rule.Type == database.AccessRuleRuleDisable) {
+		rule.Variable = firstNonEmpty(rule.Variable, strings.Split(firstQueryParam(log.Path), "=")[0])
+		rule.Value = pathScopedWhitelistValue(pathValue, rule.Value)
+	}
 	if rule.Description == "" {
 		rule.Description = fmt.Sprintf("由攻击事件 %d 生成", log.ID)
 	}
 	if rule.Type == database.AccessRuleRuleDisable && rule.RuleID == "" {
-		rule.RuleID = rule.Value
+		rule.RuleID = strings.TrimPrefix(rule.Value, pathValue+"|")
 	}
 	if strings.TrimSpace(payload.Status) == "disabled" {
 		rule.Enabled = false
@@ -2922,6 +2959,30 @@ func whitelistPayloadToRule(payload whitelistApplyPayload, log database.AttackLo
 	return rule, nil
 }
 
+func defaultWhitelistValue(ruleType string, log database.AttackLog) string {
+	switch ruleType {
+	case database.AccessRuleURLWhitelist:
+		return strings.Split(strings.TrimSpace(log.Path), "?")[0]
+	case database.AccessRuleParamWhitelist:
+		return firstQueryParam(log.Path)
+	case database.AccessRuleIPWhitelist, database.AccessRuleCIDRWhitelist:
+		return strings.TrimSpace(log.SourceIP)
+	case database.AccessRuleRuleDisable:
+		return strings.TrimSpace(log.RuleID)
+	default:
+		return ""
+	}
+}
+
+func pathScopedWhitelistValue(pathValue, value string) string {
+	pathValue = strings.Split(strings.TrimSpace(pathValue), "?")[0]
+	value = strings.TrimSpace(value)
+	if pathValue == "" || value == "" || strings.HasPrefix(value, pathValue+"|") {
+		return value
+	}
+	return pathValue + "|" + value
+}
+
 func normalizeWhitelistScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "global", "path", "ruleid", "rule_id", "variable":
@@ -2936,6 +2997,44 @@ func logSource(log database.AttackLog) string {
 		return ""
 	}
 	return fmt.Sprintf("attack-log:%d", log.ID)
+}
+
+func (s *Server) validateAttackLogWhitelist(_ context.Context, log database.AttackLog) whitelistValidationResponse {
+	snapshot := s.policySnapshot()
+	now := time.Now().UnixMilli()
+	req := accesscontrol.Request{SiteID: log.SiteID, SourceIP: net.ParseIP(log.SourceIP), Method: log.Method, Path: log.Path, Args: queryArgs(log.Path)}
+	applicable := make([]database.AccessRule, 0, len(snapshot.AccessRules))
+	for _, rule := range snapshot.AccessRules {
+		if ruleAppliesToRequest(rule, log.SiteID, log.Path, now) {
+			applicable = append(applicable, rule)
+		}
+	}
+	before := "block"
+	after := accesscontrol.NewEvaluator(applicable).Evaluate(req)
+	status := "not_equivalent"
+	if after.Decision == accesscontrol.DecisionAllow || after.Decision == accesscontrol.DecisionSkipDetection {
+		status = "would_allow"
+	}
+	return whitelistValidationResponse{AttackLogID: fmt.Sprintf("%d", log.ID), RuleID: resultRuleID(after), BeforeDecision: before, AfterDecision: string(after.Decision), EquivalentStatus: status, Reason: after.Reason}
+}
+
+func queryArgs(pathValue string) map[string][]string {
+	idx := strings.Index(pathValue, "?")
+	if idx < 0 || idx+1 >= len(pathValue) {
+		return nil
+	}
+	values, err := url.ParseQuery(pathValue[idx+1:])
+	if err != nil {
+		return nil
+	}
+	return values
+}
+
+func resultRuleID(result accesscontrol.Result) string {
+	if result.Rule.ID > 0 {
+		return fmt.Sprintf("%d", result.Rule.ID)
+	}
+	return firstNonEmpty(result.Rule.RuleID, result.Rule.Value)
 }
 
 func parseWhitelistExpiresAt(value string) (int64, error) {

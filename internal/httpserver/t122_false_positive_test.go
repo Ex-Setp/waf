@@ -54,7 +54,7 @@ func TestT122AttackLogCanGenerateWhitelistAndAuditEvent(t *testing.T) {
 	if err := json.Unmarshal(apply.Body.Bytes(), &rule); err != nil {
 		t.Fatal(err)
 	}
-	if rule.Type != database.AccessRuleParamWhitelist || rule.Value != "q=<script>" || rule.Status != "enabled" {
+	if rule.Type != database.AccessRuleParamWhitelist || rule.Value != "/search|q=<script>" || rule.Status != "enabled" {
 		t.Fatalf("unexpected rule: %#v", rule)
 	}
 

@@ -144,3 +144,15 @@ curl http://127.0.0.1:8080/api/dashboard/overview
 2. 不要把 `web/node_modules` 放进来，镜像构建时会自动 `npm ci`。
 3. 不要把本地 `.db` 数据库文件提交到镜像，线上数据在 `data/` volume。
 4. 默认配置适合先跑通 Docker；生产域名、HTTPS、CRS、eBPF 可后续逐步开启。
+
+## T147 operations acceptance
+
+Production startup is not accepted until the backend reports live runtime health:
+
+```bash
+curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8080/api/settings
+curl -fsS http://127.0.0.1:8080/api/system/listeners
+```
+
+Check `/healthz` for `listener`, `database`, `runtime`, `ruleEngine`, and `logQueue`. `database.status` should be `ok`, runtime counts should match configured sites, `ruleEngine.ruleCount` should reflect mounted rules, `logQueue.droppedAccess` should stay at `0`, and enabled site ports should appear as listening.

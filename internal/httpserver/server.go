@@ -328,8 +328,8 @@ func (s *Server) address() string {
 	return fmt.Sprintf("%s:%d", host, port)
 }
 
-func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.healthSummary(r.Context()))
 }
 
 func (s *Server) handleWAF(w http.ResponseWriter, r *http.Request) {

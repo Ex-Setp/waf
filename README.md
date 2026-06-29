@@ -116,3 +116,9 @@ URL=http://127.0.0.1:9090/?q=1 DURATION=30s THREADS=4 CONNECTIONS=256 scripts/pe
 - T036-T040 特征闭环
 - T050-T058 前端控制台
 - T060-T073 集成、测试、部署与文档
+
+## Runtime health and operations
+
+The backend exposes production health at `GET /healthz`. The response includes listener ports, database ping status, runtime site/host counts, rule engine counts, and audit log queue depth/drop counts. The console system settings page reads the same live status through `GET /api/settings`.
+
+Deployment acceptance for T147: confirm `database.status=ok`, runtime counts match configured sites, rules are loaded, log queue drops are not increasing, and enabled site `listenPort` values are listening via `GET /api/system/listeners`.

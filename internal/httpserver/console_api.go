@@ -530,16 +530,17 @@ type trafficTrendResponse struct {
 }
 
 type systemSettings struct {
-	ServerHost     string `json:"serverHost"`
-	ServerPort     int    `json:"serverPort"`
-	Mode           string `json:"mode"`
-	FailOpen       bool   `json:"failOpen"`
-	MaxBodySize    int64  `json:"maxBodySize"`
-	EnableSemantic bool   `json:"enableSemantic"`
-	EnableXDP      bool   `json:"enableXdp"`
-	DatabaseDriver string `json:"databaseDriver"`
-	RulesDirectory string `json:"rulesDirectory"`
-	LoggingLevel   string `json:"loggingLevel"`
+	ServerHost     string        `json:"serverHost"`
+	ServerPort     int           `json:"serverPort"`
+	Mode           string        `json:"mode"`
+	FailOpen       bool          `json:"failOpen"`
+	MaxBodySize    int64         `json:"maxBodySize"`
+	EnableSemantic bool          `json:"enableSemantic"`
+	EnableXDP      bool          `json:"enableXdp"`
+	DatabaseDriver string        `json:"databaseDriver"`
+	RulesDirectory string        `json:"rulesDirectory"`
+	LoggingLevel   string        `json:"loggingLevel"`
+	RuntimeStatus  healthSummary `json:"runtimeStatus"`
 }
 type fingerprintResponse struct {
 	Fingerprints []semanticFingerprint `json:"fingerprints"`
@@ -3318,7 +3319,7 @@ func sampleCaptchaSettings() captchaSettings {
 	return captchaSettings{ImageCaptcha: true, SliderCaptcha: true, TTLSeconds: 300, MaxAttempts: 5, Triggers: []captchaTrigger{{ID: "cap-001", Name: "CC Challenge", Condition: "CC policy captcha", Method: "button", Enabled: true}}}
 }
 func (s *Server) systemSettings() systemSettings {
-	return systemSettings{ServerHost: s.cfg.Host, ServerPort: s.cfg.Port, Mode: s.cfg.Mode, FailOpen: true, MaxBodySize: s.security.MaxBodySize, EnableSemantic: s.security.EnableSemantic, EnableXDP: s.security.EnableXDP, DatabaseDriver: "sqlite", RulesDirectory: "rules", LoggingLevel: "info"}
+	return systemSettings{ServerHost: s.cfg.Host, ServerPort: s.cfg.Port, Mode: s.cfg.Mode, FailOpen: true, MaxBodySize: s.security.MaxBodySize, EnableSemantic: s.security.EnableSemantic, EnableXDP: s.security.EnableXDP, DatabaseDriver: "sqlite", RulesDirectory: "rules", LoggingLevel: "info", RuntimeStatus: s.healthSummary(context.Background())}
 }
 
 func ptrFloat(v float64) *float64 { return &v }

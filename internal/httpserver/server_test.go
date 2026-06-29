@@ -46,12 +46,56 @@ func TestHealthzDoesNotCallPipeline(t *testing.T) {
 	if len(processor.calls) != 0 {
 		t.Fatalf("healthz called pipeline %d times", len(processor.calls))
 	}
-	var body map[string]string
+	var body healthSummary
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body["status"] != "ok" {
-		t.Fatalf("health status = %q, want ok", body["status"])
+	if body.Status == "" || body.Uptime == "" || body.Runtime.Status == "" {
+		t.Fatalf("health summary missing runtime fields: %#v", body)
+	}
+}
+
+func TestT147HealthzReportsRuntimeOperationsSummary(t *testing.T) {
+	db := testDB(t)
+	ruleDir := t.TempDir()
+	ruleContent := `SecRule ARGS "@contains t147" "id:147001,phase:2,deny,status:403,msg:'t147 health rule'"`
+	if err := os.WriteFile(filepath.Join(ruleDir, "REQUEST-T147.conf"), []byte(ruleContent), 0o600); err != nil {
+		t.Fatalf("write rule: %v", err)
+	}
+	engine, err := detection.NewManager(ruleDir, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	site := database.Site{Name: "ops", Upstream: "http://127.0.0.1:65535", ListenPort: 18080, Status: database.SiteStatusEnabled, WAFEnabled: true}
+	if err := site.SetDomains([]string{"ops.local"}); err != nil {
+		t.Fatalf("SetDomains: %v", err)
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	server := New(config.ServerConfig{}, config.SecurityConfig{MaxBodySize: 1024}, &processorStub{}, WithDatabase(db), WithDetectionEngine(engine))
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var summary healthSummary
+	decodeJSON(t, recorder, &summary)
+	if summary.Database.Status != "ok" {
+		t.Fatalf("database health = %#v", summary.Database)
+	}
+	if summary.Runtime.SiteCount != 1 || summary.Runtime.EnabledSiteCount != 1 || summary.Runtime.HostCount != 1 {
+		t.Fatalf("runtime health = %#v", summary.Runtime)
+	}
+	if summary.RuleEngine.RuleCount != 1 || summary.RuleEngine.EnabledRuleCount != 1 {
+		t.Fatalf("rule engine health = %#v", summary.RuleEngine)
+	}
+	if summary.LogQueue.Status != "ok" {
+		t.Fatalf("log queue health = %#v", summary.LogQueue)
+	}
+	if summary.Listener.ConfiguredSites != 1 {
+		t.Fatalf("listener health = %#v", summary.Listener)
 	}
 }
 

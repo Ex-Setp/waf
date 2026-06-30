@@ -2562,6 +2562,314 @@ cd web && npm run build
 - [ ] 压测期间 access_logs / attack_logs / dashboard 统计一致。
 - [ ] 性能报告明确测试环境、配置、命令和结果。
 
+
+#### T149：常见攻击规则库与 90% 防护率基线
+
+**目标：** 不再只补零散规则，而是建立“内置规则包 + 攻击/正常样本集 + 自动评测报告”的规则工程体系，在可复现样本集上达到 90%+ 常见攻击阻断率，并控制标准模式误报率。
+
+**后端实现要求：**
+
+- 新增或拆分内置规则包：SQLi、XSS、RCE/命令注入、路径穿越/LFI/RFI、SSRF、XXE、文件上传/WebShell、Scanner/CVE 探测、HTTP 协议异常、API/JSON/GraphQL/JWT 异常。
+- 每条规则必须带 `id/name/group/category/severity/score/phase/variable/operator/pattern/action/tags/message/remediation` 等元数据。
+- 规则分层：高置信硬规则直接高分；组合规则走 anomaly score；语义规则提供 evidence/normalizedValue/scoreBreakdown。
+- 支持规则包热加载、加载失败回滚旧规则、规则包版本展示。
+- 建立 `testdata/security-corpus/attacks` 与 `testdata/security-corpus/benign`，覆盖攻击样本、正常样本、编码绕过样本、误报样本。
+- 新增安全评测模块，输出总体阻断率、分类阻断率、误报率、退化项列表。
+
+**前端实现要求：**
+
+- 防护配置/规则管理页展示规则包、规则组、规则数量、版本、启停状态、最近更新时间。
+- 规则详情抽屉展示规则元数据、命中变量、分数、动作、说明、修复建议和误报处理入口。
+- 新增“防护覆盖率”页或卡片，展示最近一次安全评测：总体阻断率、误报率、各攻击类型覆盖率。
+- 支持按攻击类型、规则组、严重级别、动作筛选规则。
+- API 失败或评测数据不存在时展示明确空态，不允许用假覆盖率。
+
+**验收：**
+
+- [ ] 内置规则覆盖 SQLi/XSS/RCE/Traversal/SSRF/XXE/Upload/Scanner/Protocol/API 至少 10 类。
+- [ ] 安全评测输出 `Attack block rate >= 90%` 与 `standard false positive rate <= 3%`。
+- [ ] 每类规则至少有攻击样本和正常样本回归测试。
+- [ ] 规则包 reload 失败时保留旧规则，前端显示失败原因。
+- [ ] 攻击事件详情能看到命中规则的元数据和解释。
+
+**验证命令：**
+
+```bash
+go test ./internal/detection ./internal/pipeline ./internal/httpserver ./internal/securityeval -run 'TestT149|TestSecurityCoverage|TestRulePack' -count=1
+go test ./internal/detection ./internal/pipeline ./internal/httpserver ./internal/gateway -count=1
+cd web && npm run build
+```
+
+#### T150：CRS 与自研规则产品化管理
+
+**目标：** 让 CRS、自研规则、语义规则都能在控制台中被理解、搜索、启停、调参和回滚，达到雷池式规则管理体验。
+
+**后端实现要求：**
+
+- 支持 CRS 版本、规则文件、规则组、paranoia level、anomaly threshold 的 API 查询和修改。
+- 支持单规则启停、规则组启停、动作调整、score 调整，并写入持久化策略。
+- 支持自定义规则 CRUD、导入/导出 YAML/JSON、规则语法校验、测试匹配接口。
+- 规则变更必须触发 detection manager 热更新，失败时回滚并记录审计日志。
+- 规则命中统计按规则 ID、站点、时间窗口聚合。
+
+**前端实现要求：**
+
+- 防护配置新增“规则库”页签：CRS 规则、自研规则、语义规则、自定义规则分栏。
+- 规则表支持搜索、分组、严重级别、启停、动作、命中次数、最近命中时间。
+- 规则编辑/导入时先调用后端校验，失败定位到具体字段/行号。
+- 每次发布规则变更后展示 runtime version 和热更新结果。
+- 提供“回滚上一个规则版本”按钮和确认弹窗。
+
+**验收：**
+
+- [ ] 单条规则禁用后，同 payload 不再命中该规则。
+- [ ] 修改规则 score/动作后，真实请求决策随之变化。
+- [ ] 导入错误规则不会污染 runtime，前端显示校验错误。
+- [ ] 规则回滚后恢复旧行为，并写审计日志。
+
+#### T151：高级语义检测与绕过样本增强
+
+**目标：** 把 SQLChop/XSSChop 扩展为多类攻击的语义增强检测，减少纯正则绕过，提高解释能力。
+
+**后端实现要求：**
+
+- SQLChop 增强 UNION/布尔盲注/时间盲注/注释绕过/函数调用/堆叠语句/宽字节与多重编码识别。
+- XSSChop 增强 SVG/MathML、事件处理器、javascript/data URL、DOM sink、模板注入式 payload。
+- 新增 RCEChop/SSRFChop/UploadChop/ProtocolChop 的轻量证据模型。
+- 所有语义命中必须输出 `evidence/normalizedValue/tokens/structure/score/action`。
+- 语义检测受站点模式控制：standard 保守，strict 更敏感，custom 可调阈值。
+
+**前端实现要求：**
+
+- 攻击详情展示语义证据列表、规范化前后 payload、命中 token、结构特征和分数来源。
+- 防护策略页支持语义检测开关、模式、阈值、observe/block 动作说明。
+- Dashboard 支持按 semantic-sqli、semantic-xss、semantic-rce、semantic-ssrf 类型筛选。
+
+**验收：**
+
+- [ ] 编码/变形 SQLi、XSS、RCE、SSRF 样本可命中。
+- [ ] entropy-only 或普通技术文本不被单独拦截。
+- [ ] 关闭 semanticProtection 后同 payload 不因语义阶段阻断。
+- [ ] 攻击日志完整保存语义 evidence。
+
+#### T152：扫描器、Bot 与自动化攻击防护
+
+**目标：** 对常见扫描器、漏洞探测、404 扫描、登录爆破、API 高频访问形成产品级防护。
+
+**后端实现要求：**
+
+- 建立 scanner/bot 指纹：UA、Header 缺失组合、路径字典、请求节奏、状态码分布。
+- 支持 nuclei/sqlmap/nikto/dirsearch/gobuster/zgrab 等常见工具识别。
+- 404 高频、登录失败、路径爆破、API 高频访问进入 CC/Bot 策略链。
+- 支持 observe/captcha/temp-block/long-block/block 动作链和封禁过期。
+- 封禁列表可查询、解封、审计。
+
+**前端实现要求：**
+
+- CC/Bot 页面新增模板：登录防爆破、404 扫描、API 高频、静态资源刷流量、扫描器拦截。
+- 展示当前封禁 IP、触发策略、剩余时间、最近请求、解封按钮。
+- 展示 Bot/Scanner 趋势图和 Top IP/Top UA/Top Path。
+- 攻击事件支持按 scanner/bot/cc/login-bruteforce 分类筛选。
+
+**验收：**
+
+- [ ] sqlmap/nuclei/nikto UA 或典型路径探测能被识别并记录。
+- [ ] 404 高频触发后可 temp-block，解封后恢复访问。
+- [ ] 登录失败策略只影响指定登录路径，不误伤其它路径。
+- [ ] 前端封禁列表与 runtime 状态一致。
+
+#### T153：文件上传、WebShell 与内容检测闭环
+
+**目标：** 补齐上传场景防护，覆盖可执行后缀、双后缀、Content-Type 欺骗、WebShell 关键词和 magic mismatch。
+
+**后端实现要求：**
+
+- 请求解析器提取 multipart 文件名、扩展名、Content-Type、前若干 KB 内容摘要。
+- 检测可执行脚本后缀、双后缀、路径穿越文件名、危险 magic/content mismatch。
+- WebShell 规则覆盖 PHP/JSP/ASP/ASPX 常见函数与一句话木马模式。
+- 支持站点级上传策略：允许扩展名、禁止扩展名、最大大小、observe/block。
+- 攻击日志保存文件名、扩展名、Content-Type、命中证据，避免保存完整敏感文件。
+
+**前端实现要求：**
+
+- 防护配置新增“上传防护”区域：扩展名策略、大小限制、WebShell 检测开关、动作。
+- 攻击事件详情展示上传文件风险字段和证据。
+- 规则管理中上传规则归类为 upload/webshell。
+
+**验收：**
+
+- [ ] `.php`、`.jpg.php`、JSP/ASP WebShell 样本被拦截。
+- [ ] 正常图片/文档上传不误拦。
+- [ ] 文件名路径穿越被拦截。
+- [ ] 上传日志不保存完整文件内容。
+
+#### T154：协议异常、请求走私与 API 安全增强
+
+**目标：** 覆盖 HTTP 协议异常、请求走私特征、JSON/XML/GraphQL/JWT 常见攻击面。
+
+**后端实现要求：**
+
+- 检测重复 Content-Length、Transfer-Encoding 混淆、非法 method、异常 header、path/query/header/body 过长。
+- JSON body 进入规则变量，支持嵌套字段命中与日志定位。
+- XML 检测 XXE：DOCTYPE、ENTITY、SYSTEM、file/http 外部实体。
+- GraphQL 检测 introspection、depth/alias abuse 初版规则。
+- JWT 检测 none alg、畸形 token、异常 header/payload 字段。
+
+**前端实现要求：**
+
+- 防护配置新增“协议/API 防护”开关和阈值说明。
+- 攻击事件可展示 JSON path、XML 节点、GraphQL operation、JWT header 风险。
+- 访问统计支持按 API/Protocol anomaly 类型聚合。
+
+**验收：**
+
+- [ ] XXE、GraphQL introspection abuse、JWT none alg 样本能识别。
+- [ ] 正常 JSON/API 请求不误拦。
+- [ ] 协议异常日志给出明确字段和原因。
+
+#### T155：威胁情报与规则更新流水线
+
+**目标：** 让规则和威胁情报可以持续更新，而不是一次性写死。
+
+**后端实现要求：**
+
+- 支持威胁情报源配置：恶意 IP、Tor/代理出口、扫描器 UA、CVE 路径字典。
+- 支持手动更新、定时更新、签名/校验、失败回滚。
+- 规则包和情报包带版本、来源、更新时间、hash。
+- 更新后自动运行安全评测子集，失败则禁止发布到 runtime。
+
+**前端实现要求：**
+
+- 系统设置新增“规则/情报更新”页：当前版本、来源、更新时间、更新状态、手动更新按钮。
+- 展示最近更新日志、失败原因、回滚按钮。
+- 显示更新后阻断率/误报率变化。
+
+**验收：**
+
+- [ ] 手动更新规则包成功后 runtime 生效且版本变化。
+- [ ] hash/格式错误的包不会发布。
+- [ ] 更新导致评测退化时阻止上线或要求强确认。
+
+#### T156：安全覆盖率报告与持续回归门禁
+
+**目标：** 把“能防住 90% 常见攻击”变成 CI/本地都可验证的门禁，而不是口头承诺。
+
+**后端/脚本要求：**
+
+- 新增 `scripts/security_coverage_report.py` 或 Go CLI，读取安全评测输出生成 Markdown/HTML 报告。
+- 报告包含分类阻断率、误报率、退化样本、Top missed payload、Top false positives、规则版本。
+- 支持 baseline 对比：本次 vs 上次，阻断率下降或误报率上升超过阈值时失败。
+- 将报告保存到 `docs/security-coverage-report.md`。
+
+**前端实现要求：**
+
+- Dashboard 或规则中心展示最近一次覆盖率报告摘要。
+- 点击分类可跳转到规则/事件列表查看未覆盖样本或误报样本。
+- 当覆盖率低于阈值时显示风险提示。
+
+**验收：**
+
+- [ ] 一条命令生成覆盖率报告。
+- [ ] 报告中清楚展示总体阻断率、分类阻断率、误报率和规则版本。
+- [ ] 覆盖率退化会导致测试失败。
+- [ ] 前端展示报告摘要，不使用静态假数据。
+
+#### T157：前端防护中心 1:1 产品化完善
+
+**目标：** 把规则、防护模式、覆盖率、攻击事件、误报处理整合成接近雷池使用习惯的“防护中心”。
+
+**后端实现要求：**
+
+- 提供防护中心汇总 API：站点风险、规则包状态、最近攻击、覆盖率、误报待处理、策略未发布项。
+- 所有汇总数据来自真实 DB/runtime/securityeval，不允许样例数据。
+- API 返回空态原因和更新时间。
+
+**前端实现要求：**
+
+- 防护中心首页展示：防护站点数、今日攻击、规则覆盖率、误报率、规则包状态、待处理建议。
+- 规则中心、攻击事件、误报处理、策略发布之间提供明确跳转路径。
+- 删除所有防护相关 mock/fallback 假数据；API 失败时展示错误态和重试。
+- 页面布局、筛选、详情抽屉、状态标签尽量贴近雷池。
+
+**验收：**
+
+- [ ] 防护中心数据全部来自真实 API。
+- [ ] API 失败不显示假数据。
+- [ ] 攻击事件能跳转到规则详情、误报处理、封禁操作。
+- [ ] 页面构成可用于演示“规则能力 + 运行态防护 + 覆盖率”。
+
+#### T158：管理认证、权限与安全操作审计
+
+**目标：** 规则和策略变更属于高危操作，必须补齐管理员认证、权限和审计。
+
+**后端实现要求：**
+
+- 初始化管理员账号、密码 hash、登录/session 或 JWT、退出登录、修改密码。
+- RBAC：管理员、运维、只读观察者。
+- 对站点、规则、策略、白名单、证书、更新、封禁等操作记录审计日志。
+- 审计日志保存操作者、IP、User-Agent、对象、动作、修改前后 diff。
+
+**前端实现要求：**
+
+- 登录页、首次初始化页、修改密码页。
+- 根据角色隐藏或禁用高危操作。
+- 系统设置新增审计日志页，支持筛选对象、动作、操作者、时间。
+- 高危操作二次确认，并展示影响范围。
+
+**验收：**
+
+- [ ] 未登录不能访问管理 API。
+- [ ] 只读用户不能修改规则/策略。
+- [ ] 规则变更审计日志包含 diff。
+- [ ] 前端权限与后端权限一致，不能只靠前端隐藏。
+
+#### T159：告警通知与安全运营闭环
+
+**目标：** 让 WAF 不只是被动记录，还能在攻击和系统异常时主动通知。
+
+**后端实现要求：**
+
+- 支持 Webhook/邮件/飞书/企业微信/Telegram 等通知通道的可扩展配置。
+- 告警规则：攻击数突增、CC 触发、scanner 爆发、listener 异常、源站不可达、证书快过期、规则更新失败。
+- 告警去重、静默窗口、恢复通知。
+- 告警发送结果入库，失败可重试。
+
+**前端实现要求：**
+
+- 系统设置新增通知通道配置和测试发送按钮。
+- 告警规则页面支持启停、阈值、通道、静默时间。
+- 告警历史页展示发送状态、失败原因、关联攻击/系统事件。
+
+**验收：**
+
+- [ ] CC 爆发或 listener 异常能触发告警。
+- [ ] 测试通知能显示成功/失败详情。
+- [ ] 静默窗口内不会重复刷屏。
+
+#### T160：日志保留、导出与生产数据治理
+
+**目标：** 补齐长期运行所需的数据保留、清理、导出和容量控制。
+
+**后端实现要求：**
+
+- 支持 access log、attack log、audit log 的保留天数配置。
+- 后台定时清理过期日志，清理结果写审计/系统事件。
+- 支持按站点、时间、攻击类型导出 CSV/JSON。
+- 提供数据库大小、日志增长速率、队列积压指标。
+- SQLite 到 PostgreSQL/MySQL 的部署说明和迁移策略。
+
+**前端实现要求：**
+
+- 系统设置新增“数据保留”页：各类日志保留天数、当前数据量、预计剩余容量。
+- 攻击事件/访问日志/审计日志页面提供导出按钮和导出进度。
+- 数据清理高危操作二次确认。
+
+**验收：**
+
+- [ ] 日志保留策略自动清理过期数据。
+- [ ] 导出文件内容与筛选条件一致。
+- [ ] 前端显示真实数据量和清理结果。
+
 ### 15.3 前后端联动总表
 
 | 优化项 | 后端变化 | 前端变化 | 运行时/日志联动 | 验收重点 |
@@ -2572,6 +2880,18 @@ cd web && npm run build
 | T146 误报闭环 | whitelist suggestion、最小作用域、重放验证 | 攻击事件一键加白、风险确认、验证按钮 | 白名单命中审计、事件来源反查 | 只放行误报，不扩大绕过面 |
 | T147 部署运维 | healthz 状态、Docker/端口/TLS 文档 | 系统运行状态页 | listener/DB/rule/log queue 状态 | 空环境按文档可部署 |
 | T148 回归压测 | smoke/benchmark 脚本、报告输出 | 统计页展示真实趋势 | access/attack/dashboard 一致 | 有真实工具输出和报告 |
+| T149 规则库与防护率基线 | 多类规则包、安全样本集、自动评测 | 规则包/覆盖率展示、规则详情解释 | securityeval、attack explanation、规则版本 | 攻击阻断率 >=90%，误报率可控 |
+| T150 CRS/规则产品化 | CRS 版本、规则启停、动作/score、回滚 | 规则库分栏、搜索、编辑、导入导出 | detection hot reload、审计、命中统计 | 单规则变更影响真实请求 |
+| T151 高级语义检测 | SQL/XSS/RCE/SSRF/Upload/Protocol evidence | 语义证据、normalized payload、类型筛选 | scoreBreakdown、semantic runtime policy | 变形攻击命中，entropy-only 不误拦 |
+| T152 Scanner/Bot 防护 | 指纹、404/登录/API 高频、封禁链 | CC/Bot 模板、封禁列表、趋势图 | limiter runtime、security events、block expiry | 自动化攻击可识别、可解封 |
+| T153 上传/WebShell | multipart 文件风险、WebShell 规则、上传策略 | 上传防护配置、文件证据详情 | upload attack logs、脱敏摘要 | 恶意上传拦截，正常上传不过拦 |
+| T154 协议/API 安全 | smuggling/XXE/GraphQL/JWT/JSON path | 协议/API 防护页、字段级证据 | protocol anomaly logs、API 分类统计 | 协议异常可解释 |
+| T155 规则/情报更新 | 情报源、签名校验、更新回滚、评测门禁 | 更新中心、版本、失败原因、回滚 | rule/intel version、update audit | 坏包不上线，更新后可验证 |
+| T156 覆盖率报告 | 报告生成、baseline 对比、退化失败 | Dashboard/规则中心展示报告摘要 | coverage report、CI gate | 防护率不是口头承诺 |
+| T157 防护中心产品化 | 汇总 API、真实 runtime/DB/securityeval 数据 | 防护中心首页、跳转闭环、无 mock | 防护态势、误报待处理、策略未发布 | 前端可演示完整防护能力 |
+| T158 认证权限审计 | 管理员、RBAC、操作 diff 审计 | 登录/初始化/RBAC/审计日志页 | audit log、actor/IP/UA/diff | 高危策略变更可追踪 |
+| T159 告警通知 | Webhook/邮件/IM、规则、去重、恢复 | 通道配置、告警规则、告警历史 | alert events、send result、retry | 攻击/异常主动通知 |
+| T160 日志数据治理 | 保留策略、导出、清理、容量指标 | 数据保留页、导出进度、容量展示 | retention audit、DB size metrics | 长期运行不爆库 |
 
 ### 15.4 开发纪律补充
 
@@ -2581,3 +2901,5 @@ cd web && npm run build
 - 涉及检测策略的任务，必须同时写误报样本测试和攻击样本测试。
 - 涉及部署/端口/TLS 的任务，必须在 Docker 和本机直跑两种场景说明差异。
 - 涉及性能承诺的任务，必须提供真实压测命令和结果，不能写“理论可支持”。
+- 涉及“防住 90% 常见攻击”的任务，必须用安全样本集、阻断率、误报率和覆盖率报告证明，不能写绝对承诺。
+- 涉及规则/策略/白名单/封禁/证书/更新的前端入口，必须有后端权限校验和审计日志，不能只靠前端隐藏。

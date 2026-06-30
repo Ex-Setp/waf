@@ -280,7 +280,11 @@ func toDataplaneRequest(req Request) dataplane.RequestMeta {
 }
 
 func toDetectionRequest(req Request) detection.Request {
-	normalized := normalizer.RequestCopy(normalizer.Request{Method: req.Method, URI: req.Path, Headers: req.Headers, Body: req.Body, Args: req.Args})
+	headers := req.Headers.Clone()
+	if strings.TrimSpace(req.Host) != "" && headers.Get("Host") == "" {
+		headers.Set("Host", req.Host)
+	}
+	normalized := normalizer.RequestCopy(normalizer.Request{Method: req.Method, URI: req.Path, Headers: headers, Body: req.Body, Args: req.Args})
 	return detection.Request{Method: normalized.Method, URI: normalized.URI, Headers: normalized.Headers, Body: normalized.Body, Args: normalized.Args, EnabledRuleGroups: req.EnabledRuleGroups}
 }
 

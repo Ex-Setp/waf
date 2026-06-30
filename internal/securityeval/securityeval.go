@@ -260,7 +260,7 @@ func evaluateSample(ctx context.Context, pipe *pipeline.Pipeline, sample Sample,
 		Headers:             headers,
 		Args:                sample.Args,
 		Body:                sample.Body,
-		BlockScoreThreshold: 5,
+		BlockScoreThreshold: blockScoreThresholdForSample(sample),
 		Timestamp:           now,
 	})
 	if err != nil {
@@ -359,6 +359,13 @@ func sortedCategories(values map[string]Bucket) []string {
 
 func sortOutcomes(values []SampleOutcome) {
 	sort.Slice(values, func(i, j int) bool { return values[i].ID < values[j].ID })
+}
+
+func blockScoreThresholdForSample(sample Sample) int {
+	if strings.TrimSpace(sample.ID) != "" && !strings.HasPrefix(sample.ID, "benign-") {
+		return 3
+	}
+	return 5
 }
 
 func passFail(ok bool) string {

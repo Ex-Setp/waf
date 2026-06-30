@@ -125,6 +125,428 @@
       "uri": "/api/order",
       "headers": { "Content-Type": "application/json", "Transfer-Encoding": "chunked", "User-Agent": "Mozilla/5.0" },
       "body": "{\"id\":123}"
+    },
+
+    {
+      "id": "benign-search-or-query",
+      "category": "sqli",
+      "method": "GET",
+      "uri": "/search?q=or%20and%20select%20from%20users%20table",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "q": ["or and select from users table"] }
+    },
+    {
+      "id": "benign-search-sleep-mode",
+      "category": "sqli",
+      "method": "GET",
+      "uri": "/settings?mode=sleep&timeout=5",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "mode": ["sleep"], "timeout": ["5"] }
+    },
+    {
+      "id": "benign-article-script-js",
+      "category": "xss",
+      "method": "POST",
+      "uri": "/articles",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "title": ["How to use JavaScript in 2026"], "body": ["We will cover the script tag usage"] },
+      "body": "{\"title\":\"How to use JavaScript in 2026\",\"body\":\"We will cover the script tag usage\"}"
+    },
+    {
+      "id": "benign-profile-img-src",
+      "category": "xss",
+      "method": "POST",
+      "uri": "/profile",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "bio": ["I like using img tags with src attributes"] },
+      "body": "{\"bio\":\"I like using img tags with src attributes\"}"
+    },
+    {
+      "id": "benign-blog-svg-content",
+      "category": "xss",
+      "method": "POST",
+      "uri": "/blog",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "content": ["SVG images are great for logos and illustrations"] },
+      "body": "{\"content\":\"SVG images are great for logos and illustrations\"}"
+    },
+    {
+      "id": "benign-api-mutation",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["mutation { updateUser(id: 123, name: \"test\") { id name } }"] },
+      "body": "{\"query\":\"mutation { updateUser(id: 123, name: \\\"test\\\") { id name } }\"}"
+    },
+    {
+      "id": "benign-api-mutation-json",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["mutation { createPost(input: {title: \"Hello World\"}) { id } }"] },
+      "body": "{\"query\":\"mutation { createPost(input: {title: \\\"Hello World\\\"}) { id } }\"}"
+    },
+    {
+      "id": "benign-api-jwt-normal",
+      "category": "api",
+      "method": "GET",
+      "uri": "/api/me",
+      "headers": { "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-api-graphql-variable",
+      "category": "api",
+      "method": "POST",
+      "uri": "/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["query User($id: ID!) { user(id: $id) { name email } }"], "variables": ["{\"id\": \"123\"}"] },
+      "body": "{\"query\":\"query User($id: ID!) { user(id: $id) { name email } }\",\"variables\":{\"id\":\"123\"}}"
+    },
+    {
+      "id": "benign-api-jwt-bearer",
+      "category": "api",
+      "method": "GET",
+      "uri": "/api/orders",
+      "headers": { "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6InRlc3R1c2VyIiwicm9sZSI6ImN1c3RvbWVyIiwiaWF0IjoxNTE2MjM5MDIyfQ.validSignatureHere", "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-graphql-introspection-allowed",
+      "category": "api",
+      "method": "POST",
+      "uri": "/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["{ __schema { queryType { name } } }"] },
+      "body": "{\"query\":\"{ __schema { queryType { name } } }\"}"
+    },
+    {
+      "id": "benign-api-role-field",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/profile",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "role": ["customer"], "name": ["Alice"] },
+      "body": "{\"role\":\"customer\",\"name\":\"Alice\"}"
+    },
+    {
+      "id": "benign-api-json-array",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/batch",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "items": ["one", "two", "three", "four", "five"] },
+      "body": "{\"items\":[\"one\",\"two\",\"three\",\"four\",\"five\"]}"
+    },
+    {
+      "id": "benign-api-json-deep",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/profile",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "user": ["{\"name\":\"Bob\",\"address\":{\"city\":\"NYC\",\"zip\":10001}}"] },
+      "body": "{\"user\":{\"name\":\"Bob\",\"address\":{\"city\":\"NYC\",\"zip\":10001}}}"
+    },
+    {
+      "id": "benign-api-id-normal",
+      "category": "api",
+      "method": "GET",
+      "uri": "/api/users?user_id=123",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "user_id": ["123"] }
+    },
+    {
+      "id": "benign-api-type-normal",
+      "category": "api",
+      "method": "GET",
+      "uri": "/api/user?type=premium&id=456",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "type": ["premium"], "id": ["456"] }
+    },
+    {
+      "id": "benign-api-auth-normal",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/auth",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "token": ["a1b2c3d4e5f6g7h8i9j0"], "action": ["login"] },
+      "body": "{\"token\":\"a1b2c3d4e5f6g7h8i9j0\",\"action\":\"login\"}"
+    },
+    {
+      "id": "benign-xml-well-formed",
+      "category": "xxe",
+      "method": "POST",
+      "uri": "/api/xml",
+      "headers": { "Content-Type": "application/xml", "User-Agent": "Mozilla/5.0" },
+      "args": { "xml": ["<?xml version=\"1.0\" encoding=\"UTF-8\"?><root><field>value</field></root>"] },
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root><field>value</field></root>"
+    },
+    {
+      "id": "benign-xml-pi",
+      "category": "xxe",
+      "method": "POST",
+      "uri": "/api/xml",
+      "headers": { "Content-Type": "application/xml", "User-Agent": "Mozilla/5.0" },
+      "args": { "xml": ["<?xml version=\"1.0\"?><order status=\"pending\"><id>123</id><notes>no special chars</notes></order>"] },
+      "body": "<?xml version=\"1.0\"?><order status=\"pending\"><id>123</id><notes>no special chars</notes></order>"
+    },
+    {
+      "id": "benign-xml-cdata",
+      "category": "xxe",
+      "method": "POST",
+      "uri": "/api/xml",
+      "headers": { "Content-Type": "application/xml", "User-Agent": "Mozilla/5.0" },
+      "args": { "xml": ["<root><![CDATA[Here is some text with <b>HTML</b> inside]]></root>"] },
+      "body": "<root><![CDATA[Here is some text with <b>HTML</b> inside]]></root>"
+    },
+    {
+      "id": "benign-upload-png",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["profile.png"] },
+      "body": "--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"profile.png\"\r\nContent-Type: image/png\r\n\r\nPNGDATA\r\n--BOUNDARY--"
+    },
+    {
+      "id": "benign-upload-gif",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["banner.gif"] },
+      "body": "--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"banner.gif\"\r\nContent-Type: image/gif\r\n\r\nGIF89a\r\n--BOUNDARY--"
+    },
+    {
+      "id": "benign-upload-pdf",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["report.pdf"] },
+      "body": "--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"report.pdf\"\r\nContent-Type: application/pdf\r\n\r\nPDFDATA\r\n--BOUNDARY--"
+    },
+    {
+      "id": "benign-upload-docx",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["document.docx"] },
+      "body": "--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"document.docx\"\r\nContent-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\nDOCXDATA\r\n--BOUNDARY--"
+    },
+    {
+      "id": "benign-upload-svg",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["icon.svg"] },
+      "body": "--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"icon.svg\"\r\nContent-Type: image/svg+xml\r\n\r\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"red\"/></svg>\r\n--BOUNDARY--"
+    },
+    {
+      "id": "benign-file-log",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/logs/access-2026-06.log",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-file-config",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/assets/config.json",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-file-backup-normal",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/backup/db_2026-06-01.sql.gz",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-file-version",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/static/vendor/jquery.min.js",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-custom-webhook",
+      "category": "ssrf",
+      "method": "POST",
+      "uri": "/webhook",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "target": ["https://api.example.com/v1/notify"] },
+      "body": "{\"target\":\"https://api.example.com/v1/notify\"}"
+    },
+    {
+      "id": "benign-callback-https",
+      "category": "ssrf",
+      "method": "POST",
+      "uri": "/callback",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "callback": ["https://partner-service.example.com/callback"] },
+      "body": "{\"callback\":\"https://partner-service.example.com/callback\"}"
+    },
+    {
+      "id": "benign-scanner-wp-article",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/wp-content/uploads/2026/06/photo.jpg",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-scanner-js",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/static/js/app.js",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-scanner-css",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/static/css/style.css",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-protocol-chunked-valid",
+      "category": "protocol",
+      "method": "POST",
+      "uri": "/api/data",
+      "headers": { "Content-Type": "text/plain", "Transfer-Encoding": "chunked", "User-Agent": "Mozilla/5.0" },
+      "body": "5\r\nhello\r\n0\r\n\r\n"
+    },
+    {
+      "id": "benign-protocol-get-normal",
+      "category": "protocol",
+      "method": "GET",
+      "uri": "/search?q=hello%20world&lang=en",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-protocol-post-form",
+      "category": "protocol",
+      "method": "POST",
+      "uri": "/form",
+      "headers": { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+      "args": { "name": ["Alice"], "age": ["30"] },
+      "body": "name=Alice&age=30"
+    },
+    {
+      "id": "benign-protocol-host-valid",
+      "category": "protocol",
+      "method": "GET",
+      "uri": "/",
+      "headers": { "Host": "www.example.com", "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-proxy-request",
+      "category": "protocol",
+      "method": "GET",
+      "uri": "/",
+      "headers": { "X-Forwarded-For": "203.0.113.1", "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-bot-googlebot",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/",
+      "headers": { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" }
+    },
+    {
+      "id": "benign-bot-bingbot",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/",
+      "headers": { "User-Agent": "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)" }
+    },
+    {
+      "id": "benign-bot-facebook",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/article/123",
+      "headers": { "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)" }
+    },
+    {
+      "id": "benign-api-webhook-normal",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/webhook/stripe",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Stripe/1.0" },
+      "args": { "event": ["payment.success"], "data": ["{\"id\":\"ch_123\"}"] },
+      "body": "{\"event\":\"payment.success\",\"data\":{\"id\":\"ch_123\"}}"
+    },
+    {
+      "id": "benign-api-health",
+      "category": "api",
+      "method": "GET",
+      "uri": "/api/health",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-api-version",
+      "category": "api",
+      "method": "GET",
+      "uri": "/api/v2/status",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-graphql-fragment",
+      "category": "api",
+      "method": "POST",
+      "uri": "/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["fragment UserFields on User { id name email } query { users { ...UserFields } }"] },
+      "body": "{\"query\":\"fragment UserFields on User { id name email } query { users { ...UserFields } }\"}"
+    },
+    {
+      "id": "benign-graphql-alias",
+      "category": "api",
+      "method": "POST",
+      "uri": "/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["{ user1: user(id: 1) { name } user2: user(id: 2) { name } }"] },
+      "body": "{\"query\":\"{ user1: user(id: 1) { name } user2: user(id: 2) { name } }\"}"
+    },
+    {
+      "id": "benign-spring-actuator-allowed",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/actuator/health",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-spring-actuator-info",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/actuator/info",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-spring-actuator-metrics",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/actuator/metrics",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-admin-dashboard",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/admin/dashboard",
+      "headers": { "User-Agent": "Mozilla/5.0", "Cookie": "session=valid_auth_cookie" }
+    },
+    {
+      "id": "benign-graphql-mutation-normal",
+      "category": "api",
+      "method": "POST",
+      "uri": "/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["mutation { createUser(name: \"Test\", email: \"test@example.com\") { id name } }"] },
+      "body": "{\"query\":\"mutation { createUser(name: \\\"Test\\\", email: \\\"test@example.com\\\") { id name } }\"}"
     }
   ]
 }

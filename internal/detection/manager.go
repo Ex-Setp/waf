@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -248,16 +251,58 @@ func parseRuleFile(path string) ([]Rule, error) {
 		return nil, fmt.Errorf("read rule file %s: %w", path, err)
 	}
 	var rules []Rule
+	var current strings.Builder
+	startLine := 0
+	skipChainContinuation := false
+	flush := func() error {
+		line := strings.TrimSpace(current.String())
+		current.Reset()
+		if line == "" {
+			return nil
+		}
+		if skipChainContinuation {
+			skipChainContinuation = strings.Contains(line, "\"chain\"")
+			return nil
+		}
+		if strings.Contains(line, "\"chain\"") {
+			skipChainContinuation = true
+			return nil
+		}
+		if !strings.Contains(line, "id:") && strings.Contains(line, "\"t:none\"") {
+			return nil
+		}
+		rule, err := parseRuleLine(line, path, startLine)
+		if err != nil {
+			return err
+		}
+		rules = append(rules, rule)
+		return nil
+	}
 	for lineNumber, rawLine := range strings.Split(string(content), "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		rule, err := parseRuleLine(line, path, lineNumber+1)
-		if err != nil {
+		continued := strings.HasSuffix(line, "\\")
+		if continued {
+			line = strings.TrimSpace(strings.TrimSuffix(line, "\\"))
+		}
+		if current.Len() == 0 {
+			startLine = lineNumber + 1
+		} else {
+			current.WriteByte(' ')
+		}
+		current.WriteString(line)
+		if !continued {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if current.Len() > 0 {
+		if err := flush(); err != nil {
 			return nil, err
 		}
-		rules = append(rules, rule)
 	}
 	return rules, nil
 }
@@ -272,15 +317,10 @@ func parseRuleLine(line, source string, lineNumber int) (Rule, error) {
 	}
 	variable := strings.TrimSpace(parts[0])
 	operatorAndAction := strings.TrimSpace(parts[1])
-	if !strings.HasPrefix(operatorAndAction, "\"") {
-		return Rule{}, fmt.Errorf("%s:%d: missing operator", source, lineNumber)
+	operatorExpr, rest, err := extractQuotedWithRest(operatorAndAction)
+	if err != nil {
+		return Rule{}, fmt.Errorf("%s:%d: %w", source, lineNumber, err)
 	}
-	firstQuote := strings.Index(operatorAndAction[1:], "\"")
-	if firstQuote < 0 {
-		return Rule{}, fmt.Errorf("%s:%d: unterminated operator", source, lineNumber)
-	}
-	operatorExpr := operatorAndAction[1 : 1+firstQuote]
-	rest := strings.TrimSpace(operatorAndAction[2+firstQuote:])
 	actionPart, err := extractQuoted(rest)
 	if err != nil {
 		return Rule{}, fmt.Errorf("%s:%d: %w", source, lineNumber, err)
@@ -333,16 +373,35 @@ func parseRuleLine(line, source string, lineNumber int) (Rule, error) {
 }
 
 func extractQuoted(input string) (string, error) {
+	value, _, err := extractQuotedWithRest(input)
+	return value, err
+}
+
+func extractQuotedWithRest(input string) (string, string, error) {
 	input = strings.TrimSpace(input)
 	if !strings.HasPrefix(input, "\"") {
-		return "", errors.New("missing quoted action block")
+		return "", "", errors.New("missing quoted block")
 	}
-	input = input[1:]
-	end := strings.Index(input, "\"")
-	if end < 0 {
-		return "", errors.New("unterminated quoted action block")
+	var builder strings.Builder
+	escaped := false
+	for i := 1; i < len(input); i++ {
+		ch := input[i]
+		if escaped {
+			builder.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			builder.WriteByte(ch)
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			return builder.String(), strings.TrimSpace(input[i+1:]), nil
+		}
+		builder.WriteByte(ch)
 	}
-	return input[:end], nil
+	return "", "", errors.New("unterminated quoted block")
 }
 
 func parseActions(value string) map[string]string {
@@ -378,29 +437,192 @@ func parseOperator(expr string) (string, string) {
 func (r Rule) matches(req Request) bool {
 	target := strings.ToLower(buildTarget(r.Variable, req))
 	pattern := strings.ToLower(r.Pattern)
+	if target == "" && strings.TrimSpace(r.Variable) == "REQUEST_HEADERS:User-Agent" && r.Action == RuleActionDeny {
+		return false
+	}
+	if strings.EqualFold(pattern, "^$") {
+		if r.Action == RuleActionLog {
+			return target == ""
+		}
+		return strings.TrimSpace(r.Variable) != "REQUEST_HEADERS:User-Agent" && target == ""
+	}
 	switch r.Operator {
 	case "@contains":
 		return strings.Contains(target, pattern)
 	case "@streq":
 		return target == pattern
 	case "@rx":
-		return strings.Contains(target, pattern)
+		if strings.EqualFold(pattern, "^$") {
+			return target == ""
+		}
+		return regexMatches(pattern, target)
 	default:
 		return false
 	}
 }
 
+func regexMatches(pattern, target string) bool {
+	matched, err := regexp.MatchString(pattern, target)
+	if err == nil {
+		return matched
+	}
+	literal := strings.Trim(pattern, "()")
+	literal = strings.Trim(literal, "^$")
+	literal = strings.ReplaceAll(literal, `\\`, `\`)
+	literal = strings.ReplaceAll(literal, `\ `, " ")
+	literal = strings.ReplaceAll(literal, `\'`, `'`)
+	literal = strings.ReplaceAll(literal, `\"`, `"`)
+	if literal == "" {
+		return false
+	}
+	return strings.Contains(target, literal)
+}
+
 func buildTarget(variable string, req Request) string {
-	switch strings.ToUpper(strings.TrimSpace(variable)) {
-	case "ARGS", "REQUEST_URI", "REQUEST_LINE":
-		return req.URI + " " + flattenArgs(req.Args)
+	parts := strings.Split(variable, "|")
+	if len(parts) > 1 {
+		values := make([]string, 0, len(parts))
+		for _, part := range parts {
+			values = append(values, buildSingleTarget(part, req))
+		}
+		return strings.Join(values, " ")
+	}
+	return buildSingleTarget(variable, req)
+}
+
+func buildSingleTarget(variable string, req Request) string {
+	upper := strings.ToUpper(strings.TrimSpace(variable))
+	if name, ok := strings.CutPrefix(upper, "REQUEST_HEADERS:"); ok {
+		return req.Headers.Get(httpHeaderName(name))
+	}
+	if upper == "REQUEST_HEADERS_NAMES" {
+		return flattenHeaderNames(req.Headers)
+	}
+	base := strings.SplitN(upper, ":", 2)[0]
+	switch base {
+	case "ARGS":
+		return flattenArgs(mergedArgs(req))
+	case "ARGS_NAMES":
+		return flattenArgNames(mergedArgs(req))
+	case "REQUEST_URI", "REQUEST_LINE":
+		return req.URI + " " + decodeRepeated(req.URI)
 	case "REQUEST_HEADERS":
-		return req.Headers.Get("User-Agent") + " " + req.Headers.Get("Content-Type")
+		return flattenHeaders(req.Headers)
 	case "REQUEST_METHOD":
 		return req.Method
+	case "REQUEST_BODY":
+		return req.Body
 	default:
-		return req.Body + " " + req.URI + " " + flattenArgs(req.Args)
+		return req.Body + " " + req.URI + " " + decodeRepeated(req.URI) + " " + flattenArgs(req.Args) + " " + req.Headers.Get("User-Agent") + " " + req.Headers.Get("Content-Type")
 	}
+}
+
+func mergedArgs(req Request) map[string][]string {
+	queryArgs := parseQueryArgs(req.URI)
+	if len(req.Args) == 0 {
+		return queryArgs
+	}
+	if len(queryArgs) == 0 {
+		return req.Args
+	}
+	merged := make(map[string][]string, len(req.Args)+len(queryArgs))
+	for key, values := range req.Args {
+		merged[key] = append([]string(nil), values...)
+	}
+	for key, values := range queryArgs {
+		merged[key] = appendUniqueValues(merged[key], values)
+	}
+	return merged
+}
+
+func parseQueryArgs(uri string) map[string][]string {
+	idx := strings.Index(uri, "?")
+	if idx < 0 || idx+1 >= len(uri) {
+		return nil
+	}
+	query := uri[idx+1:]
+	values, err := url.ParseQuery(query)
+	if err != nil || len(values) == 0 {
+		return nil
+	}
+	return map[string][]string(values)
+}
+
+func appendUniqueValues(dst, src []string) []string {
+	if len(src) == 0 {
+		return dst
+	}
+	if len(dst) == 0 {
+		return append([]string(nil), src...)
+	}
+	seen := make(map[string]struct{}, len(dst))
+	for _, value := range dst {
+		seen[value] = struct{}{}
+	}
+	for _, value := range src {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		dst = append(dst, value)
+		seen[value] = struct{}{}
+	}
+	return dst
+}
+
+func decodeRepeated(value string) string {
+	decoded := value
+	for i := 0; i < 2; i++ {
+		next, err := url.QueryUnescape(decoded)
+		if err != nil || next == decoded {
+			break
+		}
+		decoded = next
+	}
+	return decoded
+}
+
+func httpHeaderName(name string) string {
+	parts := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(name)), func(r rune) bool {
+		return r == '-' || r == '_'
+	})
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, "-")
+}
+
+func flattenHeaders(headers http.Header) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var builder strings.Builder
+	for _, key := range keys {
+		builder.WriteString(key)
+		builder.WriteString("=")
+		builder.WriteString(strings.Join(headers.Values(key), ","))
+		builder.WriteString(" ")
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func flattenHeaderNames(headers http.Header) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "")
 }
 
 func flattenArgs(args map[string][]string) string {
@@ -415,6 +637,18 @@ func flattenArgs(args map[string][]string) string {
 		builder.WriteString(" ")
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func flattenArgNames(args map[string][]string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "")
 }
 
 func normalizePaths(paths []string) []string {

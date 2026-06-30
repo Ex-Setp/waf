@@ -941,7 +941,7 @@ func joinArgKey(parent, child string) string {
 
 func addArg(args map[string][]string, key, value string) {
 	key = strings.TrimSpace(key)
-	if key == "" {
+	if key == "" || strings.HasSuffix(key, ".content_type") {
 		return
 	}
 	args[key] = append(args[key], value)

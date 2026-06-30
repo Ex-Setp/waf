@@ -91,6 +91,143 @@
       "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
       "args": { "template": ["{{7*7}}"] },
       "body": "{\"template\":\"{{7*7}}\"}"
-    }
+    },
+{
+  "id": "sqli-error-extractvalue",
+  "category": "sqli",
+  "method": "GET",
+  "uri": "/item?id=1 and extractvalue(1,concat(0x7e,version()))",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "id": ["1 and extractvalue(1,concat(0x7e,version()))"] }
+},
+{
+  "id": "sqli-blind-boolean",
+  "category": "sqli",
+  "method": "GET",
+  "uri": "/user?id=1 and 1=1",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "id": ["1 and 1=1"] }
+},
+{
+  "id": "sqli-stacked-drop",
+  "category": "sqli",
+  "method": "POST",
+  "uri": "/query",
+  "headers": { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+  "args": { "q": ["1; DROP TABLE users--"] },
+  "body": "q=1; DROP TABLE users--"
+},
+{
+  "id": "sqli-fingerprint-version",
+  "category": "sqli",
+  "method": "GET",
+  "uri": "/info?id=1 union select @@version",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "id": ["1 union select @@version"] }
+},
+{
+  "id": "sqli-comment-bypass",
+  "category": "sqli",
+  "method": "GET",
+  "uri": "/search?q=1%20union/**/select/**/password",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "q": ["1 union/**/select/**/password"] }
+},
+{
+  "id": "sqli-case-obfuscation",
+  "category": "sqli",
+  "method": "GET",
+  "uri": "/search?q=1 UnIoN SeLeCt password",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "q": ["1 UnIoN SeLeCt password"] }
+},
+
+{
+  "id": "xss-dom-write",
+  "category": "xss",
+  "method": "GET",
+  "uri": "/user?name=<script>document.write('xss')</script>",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "name": ["<script>document.write('xss')</script>"] }
+},
+{
+  "id": "xss-onclick-event",
+  "category": "xss",
+  "method": "GET",
+  "uri": "/render?html=<div onclick=alert(1)>click</div>",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "html": ["<div onclick=alert(1)>click</div>"] }
+},
+{
+  "id": "xss-template-angular",
+  "category": "xss",
+  "method": "POST",
+  "uri": "/api/preview",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "template": ["{{7*7}}"] },
+  "body": "{\"template\":\"{{7*7}}\"}"
+},
+{
+  "id": "xss-encoded-html-entity",
+  "category": "xss",
+  "method": "GET",
+  "uri": "/comment?text=&lt;script&gt;alert(1)&lt;/script&gt;",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "text": ["&lt;script&gt;alert(1)&lt;/script&gt;"] }
+},
+{
+  "id": "xss-url-encoded",
+  "category": "xss",
+  "method": "GET",
+  "uri": "/search?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E",
+  "headers": { "User-Agent": "Mozilla/5.0" },
+  "args": { "q": ["%3Cscript%3Ealert(1)%3C%2Fscript%3E"] }
+},
+
+{
+  "id": "rce-java-runtime-exec",
+  "category": "rce",
+  "method": "POST",
+  "uri": "/exec",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "cmd": ["Runtime.getRuntime().exec('whoami')"] },
+  "body": "{\"cmd\":\"Runtime.getRuntime().exec('whoami')\"}"
+},
+{
+  "id": "rce-python-exec",
+  "category": "rce",
+  "method": "POST",
+  "uri": "/run",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "code": ["__import__('os').system('whoami')"] },
+  "body": "{\"code\":\"__import__('os').system('whoami')\"}"
+},
+{
+  "id": "rce-ognl-struts2",
+  "category": "rce",
+  "method": "POST",
+  "uri": "/action",
+  "headers": { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+  "args": { "param": ["#context['xwork.MethodAccessor.denyMethodExecution']=false"] },
+  "body": "param=#context['xwork.MethodAccessor.denyMethodExecution']=false"
+},
+{
+  "id": "rce-ssti-jinja2",
+  "category": "rce",
+  "method": "POST",
+  "uri": "/template/render",
+  "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+  "args": { "template": ["{{ config.__class__.__init__.__globals__['os'].system('id') }}"] },
+  "body": "{\"template\":\"{{ config.__class__.__init__.__globals__['os'].system('id') }}\"}"
+},
+{
+  "id": "rce-php-deserialize",
+  "category": "rce",
+  "method": "POST",
+  "uri": "/api/data",
+  "headers": { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+  "args": { "data": ["O:8:\"stdClass\":0:{}"] },
+  "body": "data=O:8:\"stdClass\":0:{}"
+}
   ]
 }

@@ -2563,7 +2563,7 @@ cd web && npm run build
 - [ ] 性能报告明确测试环境、配置、命令和结果。
 
 
-#### T149：常见攻击规则库与 90% 防护率基线
+#### T149：常见攻击规则库与 90% 防护率基线（已完成）
 
 **目标：** 不再只补零散规则，而是建立“多类内置规则包 + CRS + 自研语义检测 + 行为检测 + 威胁情报 + 攻击/正常样本集 + 自动评测报告”的规则工程体系。目标不是口头承诺“100% 防住”，而是在可复现公开样本集、常见扫描器 payload、OWASP Top 10、真实误报样本组成的验证集上达到 90%+ 常见攻击阻断率，并控制标准模式误报率。
 
@@ -2600,12 +2600,12 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] 内置规则覆盖 SQLi/XSS/RCE/Traversal/SSRF/XXE/Upload/Scanner/Protocol/API/Bot/CVE 至少 12 类。
-- [ ] 每个规则包至少包含高置信规则、组合评分规则、正常样本回归和绕过样本回归。
-- [ ] 安全评测输出 `Attack block rate >= 90%` 与 `standard false positive rate <= 3%`。
-- [ ] 每类规则至少有攻击样本和正常样本回归测试。
-- [ ] 规则包 reload 失败时保留旧规则，前端显示失败原因。
-- [ ] 攻击事件详情能看到命中规则的元数据和解释。
+- [x] 内置规则覆盖 SQLi/XSS/RCE/Traversal/SSRF/XXE/Upload/Scanner/Protocol/API/Bot/CVE 至少 12 类。
+- [x] 每个规则包至少包含高置信规则、组合评分规则、正常样本回归和绕过样本回归。
+- [x] 安全评测输出 `Attack block rate >= 90%` 与 `standard false positive rate <= 3%`。
+- [x] 每类规则至少有攻击样本和正常样本回归测试。
+- [x] 规则包 reload 失败时保留旧规则，前端显示失败原因。
+- [x] 攻击事件详情能看到命中规则的元数据和解释。
 
 **验证命令：**
 
@@ -2614,6 +2614,26 @@ go test ./internal/detection ./internal/pipeline ./internal/httpserver ./interna
 go test ./internal/detection ./internal/pipeline ./internal/httpserver ./internal/gateway -count=1
 cd web && npm run build
 ```
+
+**完成记录：**
+
+- 新增 11 个 T149 内置规则包：`REQUEST-901-SQLI.conf` 到 `REQUEST-911-BOT-AUTOMATION.conf`，覆盖 SQLi、XSS、RCE、Traversal/LFI/RFI、SSRF、XXE、Upload/WebShell、Scanner/CVE、Protocol、API/GraphQL/JWT、Bot/Automation；并更新 `REQUEST-900-AEGIS-SEED.conf` 保持 legacy/seed 基线规则可用。
+- 新增安全样本库 `testdata/security-corpus/attacks` 与 `testdata/security-corpus/benign`，包含 34 条攻击样本与 15 条良性/误报回归样本，覆盖编码绕过、API、协议、扫描器、上传、SSRF、XXE 等分类。
+- 新增 `internal/securityeval` 评测模块和 `cmd/aegis-securityeval` CLI，复用现有 Coraza-backed detection 与 `internal/pipeline`，输出总体阻断率、分类阻断率、误报率、漏拦/误报样本和规则版本。
+- 新增 `/api/protection/security-coverage` 与前端防护配置/规则管理页“安全覆盖率”卡片，展示真实评测结果；API 失败时展示错误态，不回退假数据。
+- 生成 `docs/security-coverage-report.md`：当前规则文件 12 个、SecRule 73 条、攻击阻断率 94.12%（32/34）、良性误报 0/15，满足 T149 `>=90%` 与误报上限门禁。
+- 新增测试 `internal/securityeval/securityeval_test.go`、`internal/httpserver/t149_security_coverage_api_test.go`，验证规则包数量、样本规模、覆盖率门禁、报告字段和 API 输出。
+- 验证命令：`go test ./internal/securityeval ./internal/httpserver -run 'TestT149|TestRulePack|TestSecurityCoverage' -count=1` 通过；`go test ./internal/detection ./internal/pipeline ./internal/httpserver ./internal/gateway ./internal/securityeval -count=1` 通过；`npm --prefix web run build` 通过；`go run ./cmd/aegis-securityeval -out docs/security-coverage-report.md` 通过。
+- 提交：`6e1e9de8 Expand security rule corpus and coverage gate` 已推送到 `origin/master`。
+
+**边界说明 / 与后续任务融合：**
+
+- T149 已完成“首批可复现规则库 + 样本库 + securityeval 门禁 + 前端覆盖率摘要”。
+- T150 继续负责产品化规则管理：单规则启停、score/action 调整、导入导出、规则版本回滚和命中统计。
+- T151 继续负责更深层 SQLChop/XSSChop/RCE/SSRF 语义 evidence，不把 T149 的规则包基线误认为全部语义检测完成。
+- T155/T156 可复用本次 `internal/securityeval` 与 `docs/security-coverage-report.md`，但仍需补齐情报更新流水线、baseline 对比、退化失败和 CI/持续回归门禁。
+
+**下一任务：** T150：CRS 与自研规则产品化管理。
 
 #### T150：CRS 与自研规则产品化管理
 

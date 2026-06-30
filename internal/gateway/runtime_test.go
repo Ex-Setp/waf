@@ -28,7 +28,7 @@ func TestRuntimeMatchesNormalizedHost(t *testing.T) {
 	}
 }
 
-func TestRuntimeCarriesSiteRuleGroups(t *testing.T) {
+func TestRuntimeCarriesSiteRuleGroupsOnlyForCustomMode(t *testing.T) {
 	site := database.Site{ID: 2, Name: "grouped", Upstream: "http://127.0.0.1:8081", Status: database.SiteStatusEnabled, WAFEnabled: true}
 	if err := site.SetDomains([]string{"grouped.local"}); err != nil {
 		t.Fatal(err)
@@ -40,7 +40,16 @@ func TestRuntimeCarriesSiteRuleGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if runtimeSite.RuleGroups != nil {
+		t.Fatalf("standard runtime rule groups = %#v, want nil", runtimeSite.RuleGroups)
+	}
+
+	site.PolicyMode = database.PolicyModeCustom
+	runtimeSite, err = FromSite(site)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(runtimeSite.RuleGroups) != 2 || runtimeSite.RuleGroups[0] != "sqli" || runtimeSite.RuleGroups[1] != "xss" {
-		t.Fatalf("runtime rule groups = %#v, want sqli/xss", runtimeSite.RuleGroups)
+		t.Fatalf("custom runtime rule groups = %#v, want sqli/xss", runtimeSite.RuleGroups)
 	}
 }

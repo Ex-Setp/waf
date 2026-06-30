@@ -184,7 +184,7 @@ func TestGlobalCaptchaWithoutTriggersChallengesAllRuntimeTraffic(t *testing.T) {
 
 func TestT124RuntimeSitePolicyIsPassedToPipeline(t *testing.T) {
 	processor := &processorStub{result: pipeline.Result{Decision: pipeline.DecisionAllow}}
-	site := database.Site{ID: 1, Name: "app", Upstream: "http://127.0.0.1:65535", Status: database.SiteStatusEnabled, WAFEnabled: true, BlockScoreThreshold: 9, PolicyMode: database.PolicyModeStandard}
+	site := database.Site{ID: 1, Name: "app", Upstream: "http://127.0.0.1:65535", Status: database.SiteStatusEnabled, WAFEnabled: true, BlockScoreThreshold: 9, PolicyMode: database.PolicyModeCustom}
 	if err := site.SetRuleGroups([]string{"sqli", "xss"}); err != nil {
 		t.Fatal(err)
 	}

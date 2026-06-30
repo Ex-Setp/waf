@@ -961,8 +961,6 @@ func (s *Server) applyPolicyDefaults(site *database.Site) {
 		site.BlockScoreThreshold = defaults.BlockScoreThreshold
 	}
 	if mode != database.PolicyModeCustom {
-		site.CCProtection = defaults.CCProtection
-		site.SemanticProtection = defaults.SemanticProtection
 		_ = site.SetRuleGroups(defaults.RuleGroups)
 	} else if len(site.RuleGroups()) == 0 {
 		_ = site.SetRuleGroups(defaults.RuleGroups)
@@ -2260,11 +2258,11 @@ func listenerProtocolForSite(site database.Site) string {
 
 func (s *Server) reloadRuntime(r *http.Request) {
 	ctx := r.Context()
+	_ = s.reloadPolicies(ctx)
 	if s.runtime != nil {
 		_ = s.runtime.Reload(ctx)
 	}
 	_ = s.syncSiteListeners(ctx)
-	_ = s.reloadPolicies(ctx)
 }
 
 func (s *Server) reloadPolicies(ctx context.Context) error {
@@ -2321,6 +2319,7 @@ func (p sitePayload) toSite(id uint) (database.Site, error) {
 		domains = []string{p.Domain}
 	}
 	policyMode := normalizePolicyMode(p.PolicyMode)
+	defaults := policyModeDefaults(policyMode)
 	threshold := p.BlockScoreThreshold
 	if threshold <= 0 {
 		threshold = defaultThresholdForPolicyMode(policyMode)
@@ -2329,7 +2328,7 @@ func (p sitePayload) toSite(id uint) (database.Site, error) {
 	if err != nil {
 		return database.Site{}, fmt.Errorf("invalid certificate id")
 	}
-	site := database.Site{ID: id, Name: p.Name, Upstream: p.Upstream, ListenPort: p.ListenPort, Status: p.Status, TLSMode: p.TLSMode, CertificateID: certID, WAFEnabled: boolDefault(p.WAFEnabled, true), CCProtection: boolDefault(p.CCProtection, policyMode == database.PolicyModeStrict), SemanticProtection: boolDefault(p.SemanticProtection, policyMode != database.PolicyModeLoose), PolicyMode: policyMode, BlockScoreThreshold: threshold}
+	site := database.Site{ID: id, Name: p.Name, Upstream: p.Upstream, ListenPort: p.ListenPort, Status: p.Status, TLSMode: p.TLSMode, CertificateID: certID, WAFEnabled: boolDefault(p.WAFEnabled, true), CCProtection: boolDefault(p.CCProtection, defaults.CCProtection), SemanticProtection: boolDefault(p.SemanticProtection, defaults.SemanticProtection), PolicyMode: policyMode, BlockScoreThreshold: threshold}
 	if err := site.SetRuleGroups(normalizeRuleGroups(p.RuleGroups)); err != nil {
 		return site, err
 	}
@@ -2357,6 +2356,12 @@ func (p sitePayload) merge(site database.Site) (database.Site, error) {
 	}
 	if strings.TrimSpace(p.PolicyMode) == "" {
 		next.PolicyMode = site.PolicyMode
+	}
+	if p.CCProtection == nil && strings.TrimSpace(p.PolicyMode) == "" {
+		next.CCProtection = site.CCProtection
+	}
+	if p.SemanticProtection == nil && strings.TrimSpace(p.PolicyMode) == "" {
+		next.SemanticProtection = site.SemanticProtection
 	}
 	if p.BlockScoreThreshold <= 0 && strings.TrimSpace(p.PolicyMode) == "" {
 		next.BlockScoreThreshold = site.BlockScoreThreshold

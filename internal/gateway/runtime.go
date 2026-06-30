@@ -127,12 +127,9 @@ func FromSite(site database.Site) (*SiteRuntime, error) {
 	if threshold <= 0 {
 		threshold = defaults.BlockScoreThreshold
 	}
-	ruleGroups := site.RuleGroups()
-	if policyMode != database.PolicyModeCustom {
-		// Productized modes expose default rule groups in API responses, but runtime
-		// must not filter CRS/seed rules by group because many legacy rules do not
-		// carry explicit group metadata. Custom mode remains the scoped filter mode.
-		ruleGroups = nil
+	var ruleGroups []string
+	if policyMode == database.PolicyModeCustom {
+		ruleGroups = site.RuleGroups()
 	}
 	return &SiteRuntime{
 		ID:                  site.ID,

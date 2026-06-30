@@ -278,8 +278,8 @@ func (s *Server) serveUpstreamWithRetry(w http.ResponseWriter, r *http.Request, 
 			upReq.Header.Set("X-Forwarded-For", ip.String())
 		}
 		resp, err := http.DefaultClient.Do(upReq)
-		cancel()
 		if err != nil {
+			cancel()
 			lastStatus, lastBody = http.StatusBadGateway, []byte(err.Error())
 			continue
 		}
@@ -291,6 +291,7 @@ func (s *Server) serveUpstreamWithRetry(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		resp.Body.Close()
+		cancel()
 		if resp.StatusCode < 500 || attempt == retries {
 			break
 		}

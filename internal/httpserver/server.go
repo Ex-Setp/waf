@@ -503,6 +503,9 @@ func (s *Server) evaluateCCWithStatus(site *gateway.SiteRuntime, req pipeline.Re
 		if statusCode > 0 && !isPostCCScope(policy.Scope) {
 			continue
 		}
+		if statusCode > 0 && isPostCCScope(policy.Scope) && !postCCPolicyAppliesToStatus(policy.Scope, statusCode) {
+			continue
+		}
 		if statusCode == 0 && isPostCCScope(policy.Scope) {
 			continue
 		}
@@ -514,6 +517,18 @@ func (s *Server) evaluateCCWithStatus(site *gateway.SiteRuntime, req pipeline.Re
 func isPostCCScope(scope string) bool {
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	return scope == "404" || scope == "not-found" || strings.HasPrefix(scope, "login-failure")
+}
+
+func postCCPolicyAppliesToStatus(scope string, statusCode int) bool {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	switch {
+	case scope == "404" || scope == "not-found":
+		return statusCode == http.StatusNotFound
+	case strings.HasPrefix(scope, "login-failure"):
+		return statusCode >= http.StatusBadRequest
+	default:
+		return true
+	}
 }
 
 func (s *Server) handleCCDecision(w http.ResponseWriter, r *http.Request, site *gateway.SiteRuntime, req pipeline.Request, result cc.Result, started time.Time, bytesIn int64) {
@@ -707,24 +722,22 @@ func (s *Server) proxyAllowResult(w http.ResponseWriter, r *http.Request, site *
 	if result.Reason == "" {
 		result.Reason = "allowed"
 	}
-	if site.CCProtection || site.PolicyMode == database.PolicyModeStrict {
-		if ccResult := s.evaluateCCWithStatus(site, req, status); ccResult.Decision != cc.DecisionAllow {
-			ccPipe := ccPipelineResult(ccResult, pipeline.DecisionAllow)
-			if ccResult.Decision == cc.DecisionCaptcha {
-				ccPipe.Decision = pipeline.DecisionBlock
-				_ = s.writeLogs(r.Context(), site, req, ccPipe, http.StatusFound, started, bytesIn, recorder.bytes)
-				http.Redirect(w, r, "/challenge", http.StatusFound)
-				return
-			}
-			if ccResult.Decision == cc.DecisionTempBlock || ccResult.Decision == cc.DecisionLongBlock || ccResult.Decision == cc.DecisionBlock {
-				ccPipe.Decision = pipeline.DecisionBlock
-				s.fastBlockIP(r.Context(), req.RemoteIP, ccPipe.Reason)
-				_ = s.writeLogs(r.Context(), site, req, ccPipe, http.StatusForbidden, started, bytesIn, recorder.bytes)
-				writeJSON(w, http.StatusForbidden, responseFromResult(ccPipe, nil))
-				return
-			}
-			result = ccPipe
+	if ccResult := s.evaluateCCWithStatus(site, req, status); ccResult.Decision != cc.DecisionAllow {
+		ccPipe := ccPipelineResult(ccResult, pipeline.DecisionAllow)
+		if ccResult.Decision == cc.DecisionCaptcha {
+			ccPipe.Decision = pipeline.DecisionBlock
+			_ = s.writeLogs(r.Context(), site, req, ccPipe, http.StatusFound, started, bytesIn, recorder.bytes)
+			http.Redirect(w, r, "/challenge", http.StatusFound)
+			return
 		}
+		if ccResult.Decision == cc.DecisionTempBlock || ccResult.Decision == cc.DecisionLongBlock || ccResult.Decision == cc.DecisionBlock {
+			ccPipe.Decision = pipeline.DecisionBlock
+			s.fastBlockIP(r.Context(), req.RemoteIP, ccPipe.Reason)
+			_ = s.writeLogs(r.Context(), site, req, ccPipe, http.StatusForbidden, started, bytesIn, recorder.bytes)
+			writeJSON(w, http.StatusForbidden, responseFromResult(ccPipe, nil))
+			return
+		}
+		result = ccPipe
 	}
 	recorder.Flush()
 	_ = s.writeLogs(r.Context(), site, req, result, status, started, bytesIn, recorder.bytes)

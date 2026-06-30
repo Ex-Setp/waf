@@ -1,0 +1,102 @@
+{
+  "samples": [
+    {
+      "id": "scanner-sqlmap-ua",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/search?q=test",
+      "headers": { "User-Agent": "sqlmap/1.8" },
+      "args": { "q": ["test"] }
+    },
+    {
+      "id": "scanner-nuclei-ua",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/",
+      "headers": { "User-Agent": "nuclei - Open-source project" }
+    },
+    {
+      "id": "cve-spring-actuator",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/actuator/env",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "cve-phpunit-eval-stdin",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "protocol-duplicate-chunked",
+      "category": "protocol",
+      "method": "POST",
+      "uri": "/api/order",
+      "headers": { "Transfer-Encoding": "chunked, chunked", "User-Agent": "Mozilla/5.0" },
+      "body": "0\r\n\r\n"
+    },
+    {
+      "id": "protocol-trace-method",
+      "category": "protocol",
+      "method": "TRACE",
+      "uri": "/",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "protocol-null-byte",
+      "category": "protocol",
+      "method": "GET",
+      "uri": "/download?file=report.pdf%00.php",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["report.pdf%00.php"] }
+    },
+    {
+      "id": "api-graphql-introspection",
+      "category": "api",
+      "method": "POST",
+      "uri": "/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["{__schema{types{name}}}"] },
+      "body": "{\"query\":\"{__schema{types{name}}}\"}"
+    },
+    {
+      "id": "api-jwt-none-body",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/session",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "tokenHeader": ["jwt_alg_none indicator"] },
+      "body": "{\"tokenHeader\":\"jwt_alg_none indicator\"}"
+    },
+    {
+      "id": "api-jwt-none-header",
+      "category": "api",
+      "method": "GET",
+      "uri": "/api/me",
+      "headers": { "Authorization": "Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.", "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "bot-python-requests",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/login",
+      "headers": { "User-Agent": "python-requests/2.31.0" }
+    },
+    {
+      "id": "bot-headless-chrome",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/checkout",
+      "headers": { "User-Agent": "Mozilla/5.0 HeadlessChrome/126.0" }
+    },
+    {
+      "id": "bot-env-discovery",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/.env",
+      "headers": { "User-Agent": "Go-http-client/1.1" }
+    }
+  ]
+}

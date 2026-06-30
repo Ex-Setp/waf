@@ -62,6 +62,31 @@ export interface CRSStatus {
   lastError?: string
 }
 
+export interface SecurityCoverageOutcome {
+  id: string
+  category?: string
+  decision?: string
+  score?: number
+  ruleIds?: number[]
+  rules?: string[]
+}
+
+export interface SecurityCoverageSummary {
+  generatedAt?: string
+  ruleFileCount?: number
+  ruleCount?: number
+  attackTotal?: number
+  attackBlocked?: number
+  attackBlockRate?: number
+  benignTotal?: number
+  benignFalsePositives?: number
+  benignFalseRate?: number
+  missedAttacks?: SecurityCoverageOutcome[]
+  falsePositives?: SecurityCoverageOutcome[]
+  attackBlockRateTarget?: number
+  falsePositiveLimit?: number
+}
+
 export interface ProtectionRule {
   id: number | string
   ruleId?: string | number
@@ -308,6 +333,11 @@ export async function fetchCRSStatus(): Promise<CRSStatus> {
 
 export async function reloadCRS(): Promise<CRSStatus> {
   const { data } = await http.post<CRSStatus>('/protection/crs/reload')
+  return data
+}
+
+export async function fetchSecurityCoverage(): Promise<SecurityCoverageSummary> {
+  const { data } = await http.get<SecurityCoverageSummary>('/protection/security-coverage')
   return data
 }
 

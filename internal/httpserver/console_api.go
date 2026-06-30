@@ -20,6 +20,7 @@ import (
 	"aegis-waf/internal/gateway"
 	"aegis-waf/internal/pipeline"
 	"aegis-waf/internal/requestparser"
+	"aegis-waf/internal/securityeval"
 )
 
 type dashboardOverview struct {
@@ -381,6 +382,21 @@ type protectionRuleSet struct {
 	RuleCount int    `json:"ruleCount"`
 	UpdatedAt string `json:"updatedAt"`
 }
+type securityCoverageResponse struct {
+	GeneratedAt           string                       `json:"generatedAt"`
+	RuleFileCount         int                          `json:"ruleFileCount"`
+	RuleCount             int                          `json:"ruleCount"`
+	AttackTotal           int                          `json:"attackTotal"`
+	AttackBlocked         int                          `json:"attackBlocked"`
+	AttackBlockRate       float64                      `json:"attackBlockRate"`
+	BenignTotal           int                          `json:"benignTotal"`
+	BenignFalsePositives  int                          `json:"benignFalsePositives"`
+	BenignFalseRate       float64                      `json:"benignFalseRate"`
+	MissedAttacks         []securityeval.SampleOutcome `json:"missedAttacks"`
+	FalsePositives        []securityeval.SampleOutcome `json:"falsePositives"`
+	AttackBlockRateTarget float64                      `json:"attackBlockRateTarget"`
+	FalsePositiveLimit    int                          `json:"falsePositiveLimit"`
+}
 type siteProtectionPolicyResponse struct {
 	Policies []siteProtectionPolicy `json:"policies"`
 	Total    int                    `json:"total"`
@@ -644,6 +660,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/protection/rule-sets" {
 		s.handleProtectionRuleSetsAPI(w, r)
+		return
+	}
+	if path == "/protection/security-coverage" {
+		s.handleProtectionSecurityCoverageAPI(w, r)
 		return
 	}
 	if path == "/protection/crs/status" || path == "/protection/crs/reload" {
@@ -1875,6 +1895,33 @@ func (s *Server) handleProtectionCRSAPI(w http.ResponseWriter, r *http.Request, 
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "api endpoint not found"})
 	}
+}
+
+func (s *Server) handleProtectionSecurityCoverageAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	result, err := securityeval.Evaluate(r.Context(), securityeval.Options{})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, securityCoverageResponse{
+		GeneratedAt:           result.GeneratedAt.Format("2006-01-02"),
+		RuleFileCount:         result.RuleFileCount,
+		RuleCount:             result.RuleCount,
+		AttackTotal:           result.AttackTotal,
+		AttackBlocked:         result.AttackBlocked,
+		AttackBlockRate:       result.AttackBlockRate,
+		BenignTotal:           result.BenignTotal,
+		BenignFalsePositives:  result.BenignFalsePositives,
+		BenignFalseRate:       result.BenignFalseRate,
+		MissedAttacks:         result.MissedAttacks,
+		FalsePositives:        result.FalsePositives,
+		AttackBlockRateTarget: result.Thresholds.AttackBlockRate,
+		FalsePositiveLimit:    result.Thresholds.BenignFalsePositives,
+	})
 }
 
 func (s *Server) handleProtectionRulesAPI(w http.ResponseWriter, r *http.Request, suffix string) {

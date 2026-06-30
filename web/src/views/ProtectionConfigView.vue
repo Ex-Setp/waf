@@ -13,6 +13,7 @@ import {
   fetchProtectionAttackEvents,
   fetchProtectionRules,
   fetchProtectionRuleSets,
+  fetchSecurityCoverage,
   fetchProtectionSemanticFingerprints,
   fetchProtectionWhitelists,
   fetchSitePolicyAudit,
@@ -42,6 +43,7 @@ import {
   type ProtectionWhitelistPayload,
   type RequestParserField,
   type RequestParserPreview,
+  type SecurityCoverageSummary,
   type SemanticFingerprintSummary,
   type SitePolicyAuditEntry,
   type SiteProtectionPolicy,
@@ -116,6 +118,7 @@ const policies = makeState<SiteProtectionPolicy>()
 const ruleSets = makeState<ProtectionRuleSet>()
 const rules = makeState<ProtectionRule>()
 const crsStatus = reactive<{ loading: boolean; reloading: boolean; error: string; data: CRSStatus }>({ loading: false, reloading: false, error: '', data: {} })
+const securityCoverage = reactive<{ loading: boolean; error: string; data: SecurityCoverageSummary }>({ loading: false, error: '', data: {} })
 const whitelists = makeState<ProtectionWhitelist>()
 const ccPolicies = makeState<CCBotPolicy>()
 const ccEvents = makeState<CCBotEvent>()
@@ -180,6 +183,7 @@ async function loadPolicies(): Promise<void> {
 async function loadRules(): Promise<void> {
   await Promise.all([
     loadCRSStatus(),
+    loadSecurityCoverage(),
     loadState(ruleSets, fetchProtectionRuleSets),
     loadState(rules, fetchProtectionRules),
   ])
@@ -195,6 +199,19 @@ async function loadCRSStatus(): Promise<void> {
     crsStatus.error = errorMessage(error)
   } finally {
     crsStatus.loading = false
+  }
+}
+
+async function loadSecurityCoverage(): Promise<void> {
+  securityCoverage.loading = true
+  securityCoverage.error = ''
+  try {
+    securityCoverage.data = await fetchSecurityCoverage()
+  } catch (error) {
+    securityCoverage.data = {}
+    securityCoverage.error = errorMessage(error)
+  } finally {
+    securityCoverage.loading = false
   }
 }
 
@@ -504,6 +521,10 @@ function displayNumber(value?: number): string {
   return typeof value === 'number' ? String(value) : '0'
 }
 
+function percent(value?: number): string {
+  return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '--'
+}
+
 function rankLabel(row: TrafficRankItem): string {
   return String(row.name || row.key || '')
 }
@@ -595,6 +616,19 @@ onMounted(() => {
           <el-card class="metric-card"><div class="metric-card__label">规则 / 文件</div><div class="metric-card__value is-success">{{ crsStatus.data.ruleCount ?? 0 }}</div><div class="metric-card__trend">文件 {{ crsStatus.data.fileCount ?? 0 }}</div></el-card>
           <el-card class="metric-card"><div class="metric-card__label">PL / 阈值</div><div class="metric-card__value is-warning">PL{{ crsStatus.data.paranoiaLevel ?? 1 }}</div><div class="metric-card__trend">入站 {{ crsStatus.data.inboundThreshold ?? 5 }} / 出站 {{ crsStatus.data.outboundThreshold ?? 5 }}</div></el-card>
           <el-card class="metric-card"><div class="metric-card__label">版本 / 最近重载</div><div class="metric-card__value is-primary">{{ crsStatus.data.version || '--' }}</div><div class="metric-card__trend">{{ formatDate(crsStatus.data.lastReloadAt) }}</div></el-card>
+        </div>
+      </div>
+      <div class="sl-card protection-panel" v-loading="securityCoverage.loading">
+        <div class="sl-card-head">
+          <span class="sl-card-title">安全覆盖率</span>
+          <span class="page-hint">来自 /api/protection/security-coverage</span>
+        </div>
+        <el-alert v-if="securityCoverage.error" type="error" :title="securityCoverage.error" show-icon :closable="false" />
+        <div v-else class="dashboard-metric-grid">
+          <el-card class="metric-card"><div class="metric-card__label">攻击拦截率</div><div class="metric-card__value is-success">{{ percent(securityCoverage.data.attackBlockRate) }}</div><div class="metric-card__trend">{{ securityCoverage.data.attackBlocked ?? 0 }}/{{ securityCoverage.data.attackTotal ?? 0 }}，目标 {{ percent(securityCoverage.data.attackBlockRateTarget) }}</div></el-card>
+          <el-card class="metric-card"><div class="metric-card__label">误报样本</div><div class="metric-card__value" :class="(securityCoverage.data.benignFalsePositives ?? 0) > (securityCoverage.data.falsePositiveLimit ?? 3) ? 'is-danger' : 'is-success'">{{ securityCoverage.data.benignFalsePositives ?? 0 }}</div><div class="metric-card__trend">良性 {{ securityCoverage.data.benignTotal ?? 0 }}，上限 {{ securityCoverage.data.falsePositiveLimit ?? 3 }}</div></el-card>
+          <el-card class="metric-card"><div class="metric-card__label">规则 / 文件</div><div class="metric-card__value is-primary">{{ securityCoverage.data.ruleCount ?? 0 }}</div><div class="metric-card__trend">文件 {{ securityCoverage.data.ruleFileCount ?? 0 }} / {{ securityCoverage.data.generatedAt || '--' }}</div></el-card>
+          <el-card class="metric-card"><div class="metric-card__label">漏拦 / 误报</div><div class="metric-card__value is-warning">{{ securityCoverage.data.missedAttacks?.length ?? 0 }} / {{ securityCoverage.data.falsePositives?.length ?? 0 }}</div><div class="metric-card__trend">{{ securityCoverage.data.missedAttacks?.[0]?.id || '无漏拦样本' }}</div></el-card>
         </div>
       </div>
       <div class="sl-card protection-panel" v-loading="ruleSets.loading">

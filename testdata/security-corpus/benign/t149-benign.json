@@ -1,0 +1,130 @@
+{
+  "samples": [
+    {
+      "id": "benign-search-union-word",
+      "category": "sqli",
+      "method": "GET",
+      "uri": "/search?q=union%20membership%20select%20committee",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "q": ["union membership select committee"] }
+    },
+    {
+      "id": "benign-login-normal",
+      "category": "sqli",
+      "method": "POST",
+      "uri": "/login",
+      "headers": { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "Mozilla/5.0" },
+      "args": { "username": ["alice"], "password": ["correct-horse-battery"] },
+      "body": "username=alice&password=correct-horse-battery"
+    },
+    {
+      "id": "benign-blog-html-escaped",
+      "category": "xss",
+      "method": "POST",
+      "uri": "/articles",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "body": ["We discuss script tags in documentation."] },
+      "body": "{\"body\":\"We discuss script tags in documentation.\"}"
+    },
+    {
+      "id": "benign-profile-image",
+      "category": "xss",
+      "method": "POST",
+      "uri": "/profile",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "avatar": ["https://cdn.example.test/avatar.png"], "bio": ["security researcher"] },
+      "body": "{\"avatar\":\"https://cdn.example.test/avatar.png\",\"bio\":\"security researcher\"}"
+    },
+    {
+      "id": "benign-shell-doc",
+      "category": "rce",
+      "method": "POST",
+      "uri": "/docs/snippet",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "snippet": ["Use id as a column name in examples, not as a command."] },
+      "body": "{\"snippet\":\"Use id as a column name in examples, not as a command.\"}"
+    },
+    {
+      "id": "benign-file-report",
+      "category": "traversal",
+      "method": "GET",
+      "uri": "/download?file=reports/2026/q2.pdf",
+      "headers": { "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["reports/2026/q2.pdf"] }
+    },
+    {
+      "id": "benign-external-webhook",
+      "category": "ssrf",
+      "method": "POST",
+      "uri": "/integrations/webhook",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "url": ["https://hooks.example.test/aegis"] },
+      "body": "{\"url\":\"https://hooks.example.test/aegis\"}"
+    },
+    {
+      "id": "benign-xml-order",
+      "category": "xxe",
+      "method": "POST",
+      "uri": "/api/xml",
+      "headers": { "Content-Type": "application/xml", "User-Agent": "Mozilla/5.0" },
+      "args": { "xml": ["<order><id>123</id><item>book</item></order>"] },
+      "body": "<order><id>123</id><item>book</item></order>"
+    },
+    {
+      "id": "benign-upload-jpeg",
+      "category": "upload",
+      "method": "POST",
+      "uri": "/upload",
+      "headers": { "Content-Type": "multipart/form-data; boundary=BOUNDARY", "User-Agent": "Mozilla/5.0" },
+      "args": { "file": ["avatar.jpg"] },
+      "body": "--BOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"avatar.jpg\"\r\nContent-Type: image/jpeg\r\n\r\nJPEGDATA\r\n--BOUNDARY--"
+    },
+    {
+      "id": "benign-wordpress-article",
+      "category": "scanner",
+      "method": "GET",
+      "uri": "/blog/wordpress-hardening-guide",
+      "headers": { "User-Agent": "Mozilla/5.0" }
+    },
+    {
+      "id": "benign-json-api",
+      "category": "api",
+      "method": "POST",
+      "uri": "/api/orders",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "items": ["book"], "role": ["customer"] },
+      "body": "{\"items\":[\"book\"],\"role\":\"customer\"}"
+    },
+    {
+      "id": "benign-graphql-query",
+      "category": "api",
+      "method": "POST",
+      "uri": "/graphql",
+      "headers": { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0" },
+      "args": { "query": ["query Order($id:ID!){order(id:$id){id total}}"] },
+      "body": "{\"query\":\"query Order($id:ID!){order(id:$id){id total}}\"}"
+    },
+    {
+      "id": "benign-curl-health",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/healthz",
+      "headers": { "User-Agent": "curl/8.0" }
+    },
+    {
+      "id": "benign-browser-checkout",
+      "category": "bot",
+      "method": "GET",
+      "uri": "/checkout",
+      "headers": { "User-Agent": "Mozilla/5.0 Chrome/126.0" }
+    },
+    {
+      "id": "benign-protocol-post",
+      "category": "protocol",
+      "method": "POST",
+      "uri": "/api/order",
+      "headers": { "Content-Type": "application/json", "Transfer-Encoding": "chunked", "User-Agent": "Mozilla/5.0" },
+      "body": "{\"id\":123}"
+    }
+  ]
+}

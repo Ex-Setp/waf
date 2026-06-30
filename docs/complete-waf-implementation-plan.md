@@ -2565,16 +2565,30 @@ cd web && npm run build
 
 #### T149：常见攻击规则库与 90% 防护率基线
 
-**目标：** 不再只补零散规则，而是建立“内置规则包 + 攻击/正常样本集 + 自动评测报告”的规则工程体系，在可复现样本集上达到 90%+ 常见攻击阻断率，并控制标准模式误报率。
+**目标：** 不再只补零散规则，而是建立“多类内置规则包 + CRS + 自研语义检测 + 行为检测 + 威胁情报 + 攻击/正常样本集 + 自动评测报告”的规则工程体系。目标不是口头承诺“100% 防住”，而是在可复现公开样本集、常见扫描器 payload、OWASP Top 10、真实误报样本组成的验证集上达到 90%+ 常见攻击阻断率，并控制标准模式误报率。
+
+**市面常见攻击防护范围：**
+
+- 注入类：SQLi、NoSQLi、命令注入、模板注入 SSTI、LDAP/XPath 注入初版规则。
+- 前端执行类：XSS、DOM XSS、SVG/MathML XSS、HTML/JS 编码绕过。
+- 文件/路径类：路径穿越、LFI/RFI、任意文件读取、文件上传、WebShell。
+- 服务端请求类：SSRF、云元数据地址访问、内网地址探测、危险协议 `file/gopher/dict`。
+- XML/API 类：XXE、JSON 注入、GraphQL introspection/depth abuse、JWT none alg/畸形 token。
+- 协议异常类：重复 Content-Length、Transfer-Encoding 混淆、请求走私特征、异常 header/path/query 长度。
+- 自动化攻击类：sqlmap/nuclei/nikto/dirsearch/gobuster/zgrab 等扫描器、404 扫描、登录爆破、API 高频访问。
+- CVE 探测类：常见高危路径、Log4Shell/JNDI、Spring/Actuator、PHPUnit、WordPress、Tomcat Manager、Solr 等探测样本。
 
 **后端实现要求：**
 
-- 新增或拆分内置规则包：SQLi、XSS、RCE/命令注入、路径穿越/LFI/RFI、SSRF、XXE、文件上传/WebShell、Scanner/CVE 探测、HTTP 协议异常、API/JSON/GraphQL/JWT 异常。
+- 新增或拆分内置规则包：SQLi、XSS、RCE/命令注入、路径穿越/LFI/RFI、SSRF、XXE、文件上传/WebShell、Scanner/CVE 探测、HTTP 协议异常、API/JSON/GraphQL/JWT 异常、Bot/自动化攻击、常见 CMS/中间件 CVE 探测。
+- 推荐规则文件布局：`rules/REQUEST-901-SQLI.conf`、`REQUEST-902-XSS.conf`、`REQUEST-903-RCE.conf`、`REQUEST-904-LFI-RFI-TRAVERSAL.conf`、`REQUEST-905-SSRF.conf`、`REQUEST-906-XXE.conf`、`REQUEST-907-UPLOAD-WEBSHELL.conf`、`REQUEST-908-SCANNER-CVE.conf`、`REQUEST-909-PROTOCOL-ANOMALY.conf`、`REQUEST-910-API-JSON-GRAPHQL-JWT.conf`、`REQUEST-911-BOT-AUTOMATION.conf`。
 - 每条规则必须带 `id/name/group/category/severity/score/phase/variable/operator/pattern/action/tags/message/remediation` 等元数据。
 - 规则分层：高置信硬规则直接高分；组合规则走 anomaly score；语义规则提供 evidence/normalizedValue/scoreBreakdown。
 - 支持规则包热加载、加载失败回滚旧规则、规则包版本展示。
 - 建立 `testdata/security-corpus/attacks` 与 `testdata/security-corpus/benign`，覆盖攻击样本、正常样本、编码绕过样本、误报样本。
-- 新增安全评测模块，输出总体阻断率、分类阻断率、误报率、退化项列表。
+- 新增安全评测模块，输出总体阻断率、分类阻断率、误报率、漏拦样本、误报样本、命中规则 ID、规则版本和退化项列表。
+- 评测指标必须按模式区分：observe 不拦截但记录，standard 追求低误报，strict 提高覆盖率，custom 按用户配置计算。
+- 明确防护率目标：总体攻击阻断率 >= 90%；SQLi/XSS/Traversal/Scanner >= 95%；RCE/SSRF/XXE/Upload/API >= 85%；standard 误报率 <= 3%；strict 误报率 <= 5%。
 
 **前端实现要求：**
 
@@ -2586,7 +2600,8 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] 内置规则覆盖 SQLi/XSS/RCE/Traversal/SSRF/XXE/Upload/Scanner/Protocol/API 至少 10 类。
+- [ ] 内置规则覆盖 SQLi/XSS/RCE/Traversal/SSRF/XXE/Upload/Scanner/Protocol/API/Bot/CVE 至少 12 类。
+- [ ] 每个规则包至少包含高置信规则、组合评分规则、正常样本回归和绕过样本回归。
 - [ ] 安全评测输出 `Attack block rate >= 90%` 与 `standard false positive rate <= 3%`。
 - [ ] 每类规则至少有攻击样本和正常样本回归测试。
 - [ ] 规则包 reload 失败时保留旧规则，前端显示失败原因。
@@ -2729,7 +2744,17 @@ cd web && npm run build
 
 #### T155：威胁情报与规则更新流水线
 
-**目标：** 让规则和威胁情报可以持续更新，而不是一次性写死。
+**目标：** 让规则和威胁情报可以持续更新，而不是一次性写死；规则更新必须形成“获取 -> 校验 -> 评测 -> 发布 -> 回滚 -> 前端可见”的完整流水线，支撑对市面新攻击、新 CVE、新扫描器 payload 的持续防护。
+
+**持续更新范围：**
+
+- 官方/内置规则包版本更新。
+- CRS 规则包版本更新。
+- 自研语义指纹包更新。
+- CVE 探测路径字典更新。
+- Scanner/Bot UA 与行为指纹更新。
+- 恶意 IP / Tor / 代理出口 / 云元数据防护列表更新。
+- WebShell 指纹与上传风险后缀更新。
 
 **后端实现要求：**
 
@@ -2737,18 +2762,25 @@ cd web && npm run build
 - 支持手动更新、定时更新、签名/校验、失败回滚。
 - 规则包和情报包带版本、来源、更新时间、hash。
 - 更新后自动运行安全评测子集，失败则禁止发布到 runtime。
+- 支持灰度发布：先 observe 记录命中，再按站点/规则组切到 block。
+- 更新过程必须写审计：来源、版本、hash、评测结果、发布人/触发器、发布时间、回滚点。
+- 新 CVE 临时规则必须支持 emergency 发布，同时在前端标记为临时规则并要求后续归档。
 
 **前端实现要求：**
 
 - 系统设置新增“规则/情报更新”页：当前版本、来源、更新时间、更新状态、手动更新按钮。
 - 展示最近更新日志、失败原因、回滚按钮。
 - 显示更新后阻断率/误报率变化。
+- 支持查看本次更新新增/删除/修改的规则、影响的规则组、可能影响的站点。
+- 当评测退化或误报率上升时，前端必须显示阻断发布原因和“仅 observe 灰度”的选择。
 
 **验收：**
 
 - [ ] 手动更新规则包成功后 runtime 生效且版本变化。
 - [ ] hash/格式错误的包不会发布。
 - [ ] 更新导致评测退化时阻止上线或要求强确认。
+- [ ] 新增规则更新后，前端能看到版本、hash、评测结果和回滚入口。
+- [ ] emergency CVE 临时规则能快速发布，并在后续规则库中可追踪。
 
 #### T156：安全覆盖率报告与持续回归门禁
 
@@ -2901,5 +2933,6 @@ cd web && npm run build
 - 涉及检测策略的任务，必须同时写误报样本测试和攻击样本测试。
 - 涉及部署/端口/TLS 的任务，必须在 Docker 和本机直跑两种场景说明差异。
 - 涉及性能承诺的任务，必须提供真实压测命令和结果，不能写“理论可支持”。
-- 涉及“防住 90% 常见攻击”的任务，必须用安全样本集、阻断率、误报率和覆盖率报告证明，不能写绝对承诺。
+- 涉及“防住 90% 常见攻击”的任务，必须用安全样本集、阻断率、误报率和覆盖率报告证明，不能写绝对承诺；报告必须列出样本来源、规则版本、漏拦样本和误报样本。
+- 涉及规则持续更新的任务，必须实现校验、评测、发布、回滚、审计和前端状态展示，不能只写下载/覆盖文件脚本。
 - 涉及规则/策略/白名单/封禁/证书/更新的前端入口，必须有后端权限校验和审计日志，不能只靠前端隐藏。

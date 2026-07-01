@@ -305,14 +305,17 @@ type ccPolicy struct {
 }
 
 type ccBlockEntry struct {
-	Key        string `json:"key"`
-	SourceIP   string `json:"sourceIp"`
-	PolicyID   string `json:"policyId,omitempty"`
-	PolicyName string `json:"policyName,omitempty"`
-	Scope      string `json:"scope,omitempty"`
-	Action     string `json:"action"`
-	Count      int    `json:"count"`
-	BlockUntil string `json:"blockUntil"`
+	Key              string `json:"key"`
+	SourceIP         string `json:"sourceIp"`
+	PolicyID         string `json:"policyId,omitempty"`
+	PolicyName       string `json:"policyName,omitempty"`
+	Scope            string `json:"scope,omitempty"`
+	Action           string `json:"action"`
+	Count            int    `json:"count"`
+	BlockUntil       string `json:"blockUntil"`
+	RemainingSeconds int64  `json:"remainingSeconds"`
+	RecentPath       string `json:"recentPath,omitempty"`
+	UserAgent        string `json:"userAgent,omitempty"`
 }
 
 type ccBlockResponse struct {
@@ -708,8 +711,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleProtectionCCPoliciesAPI(w, r)
 		return
 	}
-	if path == "/protection/cc-events" {
-		s.handleProtectionCCEventsAPI(w, r)
+	if path == "/protection/cc-events" || strings.HasPrefix(path, "/protection/cc-events/") {
+		s.handleProtectionCCEventsAPI(w, r, strings.TrimPrefix(path, "/protection/cc-events"))
 		return
 	}
 	if path == "/protection/cc-blocks" || strings.HasPrefix(path, "/protection/cc-blocks/") {
@@ -1827,22 +1830,113 @@ func (s *Server) handleProtectionCCPoliciesAPI(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"policies": protection.Policies, "total": len(protection.Policies)})
 }
 
-func (s *Server) handleProtectionCCEventsAPI(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleProtectionCCEventsAPI(w http.ResponseWriter, r *http.Request, suffix string) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
 		return
 	}
 	if s.db == nil {
-		writeJSON(w, http.StatusOK, ccBotEventResponse{Events: []ccBotEvent{}, Total: 0})
+		writeEmptyCCEventsResponse(w, suffix)
 		return
 	}
+	suffix = strings.Trim(suffix, "/")
 	var logs []database.AttackLog
-	_ = s.db.WithContext(r.Context()).Where("stage = ? OR attack_type LIKE ?", "cc", "%cc%").Order("created_at desc, id desc").Limit(1000).Find(&logs).Error
+	query := s.db.WithContext(r.Context()).Where("stage = ? OR attack_type LIKE ? OR attack_type LIKE ? OR attack_type LIKE ?", "cc", "%cc%", "%scanner%", "%bot%")
+	if attackType := strings.TrimSpace(r.URL.Query().Get("attackType")); attackType != "" {
+		query = query.Where("attack_type LIKE ?", "%"+attackType+"%")
+	}
+	_ = query.Order("created_at desc, id desc").Limit(1000).Find(&logs).Error
+	switch suffix {
+	case "trend":
+		writeJSON(w, http.StatusOK, attackTrendFromLogs(logs))
+	case "top-ip":
+		writeJSON(w, http.StatusOK, attackRankFromLogs(logs, func(log database.AttackLog) string { return log.SourceIP }, 10))
+	case "top-path":
+		writeJSON(w, http.StatusOK, attackRankFromLogs(logs, func(log database.AttackLog) string { return log.Path }, 10))
+	case "top-ua":
+		writeJSON(w, http.StatusOK, attackRankFromLogs(logs, attackLogUserAgent, 10))
+	case "":
+		writeJSON(w, http.StatusOK, ccBotEventsFromLogs(logs))
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "cc events endpoint not found"})
+	}
+}
+
+func writeEmptyCCEventsResponse(w http.ResponseWriter, suffix string) {
+	switch strings.Trim(suffix, "/") {
+	case "trend":
+		writeJSON(w, http.StatusOK, trafficTrendResponse{Trend: []attackTrendPoint{}, Total: 0})
+	case "top-ip", "top-path", "top-ua":
+		writeJSON(w, http.StatusOK, trafficRankResponse{Items: []trafficRankItem{}, Total: 0})
+	default:
+		writeJSON(w, http.StatusOK, ccBotEventResponse{Events: []ccBotEvent{}, Total: 0})
+	}
+}
+
+func ccBotEventsFromLogs(logs []database.AttackLog) ccBotEventResponse {
 	events := make([]ccBotEvent, 0, len(logs))
 	for _, log := range logs {
 		events = append(events, ccBotEvent{ID: fmt.Sprintf("%d", log.ID), Time: formatMillis(log.CreatedAt), SiteName: log.SiteName, SourceIP: log.SourceIP, PolicyName: firstNonEmpty(log.RuleMessage, log.RuleID), Scope: log.Path, Action: log.Action, Count: 1, Threshold: log.Score})
 	}
-	writeJSON(w, http.StatusOK, ccBotEventResponse{Events: events, Total: len(events)})
+	return ccBotEventResponse{Events: events, Total: len(events)}
+}
+
+func attackTrendFromLogs(logs []database.AttackLog) trafficTrendResponse {
+	counts := map[string]int{}
+	for _, log := range logs {
+		day := time.UnixMilli(log.CreatedAt).Format("01-02")
+		counts[day]++
+	}
+	days := make([]string, 0, len(counts))
+	for day := range counts {
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	trend := make([]attackTrendPoint, 0, len(days))
+	for _, day := range days {
+		count := counts[day]
+		trend = append(trend, attackTrendPoint{Time: day, Requests: count, Blocked: count})
+	}
+	return trafficTrendResponse{Trend: trend, Total: len(trend)}
+}
+
+func attackRankFromLogs(logs []database.AttackLog, value func(database.AttackLog) string, limit int) trafficRankResponse {
+	counts := map[string]int{}
+	for _, log := range logs {
+		key := strings.TrimSpace(value(log))
+		if key != "" {
+			counts[key]++
+		}
+	}
+	items := make([]trafficRankItem, 0, len(counts))
+	for key, count := range counts {
+		items = append(items, trafficRankItem{Name: key, Key: key, Value: count, Count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count == items[j].Count {
+			return items[i].Key < items[j].Key
+		}
+		return items[i].Count > items[j].Count
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return trafficRankResponse{Items: items, Total: len(items)}
+}
+
+func attackLogUserAgent(log database.AttackLog) string {
+	marker := "User-Agent:"
+	idx := strings.Index(log.PayloadSnippet, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(log.PayloadSnippet[idx+len(marker):])
+	for _, sep := range []string{"\\n", "\n", "\r", "\""} {
+		if lineEnd := strings.Index(rest, sep); lineEnd >= 0 {
+			rest = rest[:lineEnd]
+		}
+	}
+	return strings.TrimSpace(rest)
 }
 
 func (s *Server) handleProtectionCCBlocksAPI(w http.ResponseWriter, r *http.Request, suffix string) {
@@ -1892,7 +1986,11 @@ func (s *Server) handleProtectionCCBlocksAPI(w http.ResponseWriter, r *http.Requ
 }
 
 func ccActiveBlockToAPI(block cc.ActiveBlock) ccBlockEntry {
-	return ccBlockEntry{Key: block.Key, SourceIP: block.SourceIP, PolicyID: idString(block.Policy.ID), PolicyName: block.Policy.Name, Scope: block.Policy.Scope, Action: string(block.Decision), Count: block.Count, BlockUntil: block.BlockUntil.Format(time.RFC3339)}
+	remaining := int64(time.Until(block.BlockUntil).Seconds())
+	if remaining < 0 {
+		remaining = 0
+	}
+	return ccBlockEntry{Key: block.Key, SourceIP: block.SourceIP, PolicyID: idString(block.Policy.ID), PolicyName: block.Policy.Name, Scope: block.Policy.Scope, Action: string(block.Decision), Count: block.Count, BlockUntil: block.BlockUntil.Format(time.RFC3339), RemainingSeconds: remaining, RecentPath: block.RecentPath, UserAgent: block.UserAgent}
 }
 
 func (s *Server) handleProtectionRuleSetsAPI(w http.ResponseWriter, r *http.Request) {

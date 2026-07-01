@@ -33,6 +33,7 @@ type Result struct {
 	Count      int
 	Key        string
 	BlockUntil time.Time
+	Request    Request
 }
 
 type ActiveBlock struct {
@@ -42,6 +43,8 @@ type ActiveBlock struct {
 	BlockUntil time.Time
 	Policy     database.CCPolicy
 	SourceIP   string
+	RecentPath string
+	UserAgent  string
 }
 
 type Request struct {
@@ -65,6 +68,7 @@ type blockState struct {
 	until    time.Time
 	count    int
 	policy   database.CCPolicy
+	req      Request
 }
 
 func NewLimiter() *Limiter {
@@ -89,18 +93,18 @@ func (l *Limiter) Evaluate(req Request, policies []database.CCPolicy) Result {
 			continue
 		}
 		if block, active := l.activeBlock(key); active {
-			return Result{Decision: block.decision, Policy: policy, Count: block.count, Key: key, BlockUntil: block.until}
+			return Result{Decision: block.decision, Policy: policy, Count: block.count, Key: key, BlockUntil: block.until, Request: block.req}
 		}
 		count := l.record(key, time.Duration(policy.WindowSeconds)*time.Second)
 		if policy.Threshold > 0 && count > policy.Threshold {
 			decision := l.nextAction(key, policy.Action)
-			result := Result{Decision: decision, Policy: policy, Count: count, Key: key}
+			result := Result{Decision: decision, Policy: policy, Count: count, Key: key, Request: req}
 			if decision == DecisionTempBlock || decision == DecisionLongBlock {
-				result.BlockUntil = l.storeBlock(key, decision, count, policy)
+				result.BlockUntil = l.storeBlock(key, decision, count, policy, req)
 			}
 			return result
 		}
-		return Result{Decision: DecisionAllow, Policy: policy, Count: count, Key: key}
+		return Result{Decision: DecisionAllow, Policy: policy, Count: count, Key: key, Request: req}
 	}
 	return Result{Decision: DecisionAllow}
 }
@@ -131,7 +135,7 @@ func (l *Limiter) ActiveBlocks(_ []database.CCPolicy) []ActiveBlock {
 		if !now.Before(block.until) {
 			continue
 		}
-		blocks = append(blocks, ActiveBlock{Key: key, Decision: block.decision, Count: block.count, BlockUntil: block.until, Policy: block.policy, SourceIP: sourceIPFromKey(key)})
+		blocks = append(blocks, ActiveBlock{Key: key, Decision: block.decision, Count: block.count, BlockUntil: block.until, Policy: block.policy, SourceIP: sourceIPFromKey(key), RecentPath: block.req.Path, UserAgent: block.req.UserAgent})
 	}
 	sort.Slice(blocks, func(i, j int) bool { return blocks[i].BlockUntil.After(blocks[j].BlockUntil) })
 	return blocks
@@ -222,14 +226,14 @@ func (l *Limiter) activeBlock(key string) (blockState, bool) {
 	return blockState{}, false
 }
 
-func (l *Limiter) storeBlock(key string, decision Decision, count int, policy database.CCPolicy) time.Time {
+func (l *Limiter) storeBlock(key string, decision Decision, count int, policy database.CCPolicy, req Request) time.Time {
 	duration := DefaultTempBlockDuration
 	if decision == DecisionLongBlock {
 		duration = DefaultLongBlockDuration
 	}
 	until := l.now().Add(duration)
 	l.mu.Lock()
-	l.blocks[key] = blockState{decision: decision, until: until, count: count, policy: policy}
+	l.blocks[key] = blockState{decision: decision, until: until, count: count, policy: policy, req: req}
 	l.mu.Unlock()
 	return until
 }

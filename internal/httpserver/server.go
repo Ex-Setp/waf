@@ -386,6 +386,12 @@ func (s *Server) handleWAF(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if !site.CCProtection {
+		if scannerResult := detectScannerProbe(req); scannerResult.Decision == pipeline.DecisionBlock {
+			s.writeBlock(w, site, req, scannerResult, nil, http.StatusForbidden, started, bytesIn)
+			return
+		}
+	}
 	var result pipeline.Result
 	if site.WAFEnabled && s.processor != nil {
 		var processErr error
@@ -591,11 +597,36 @@ func ccAttackType(result cc.Result) string {
 	switch {
 	case scope == "404" || scope == "not-found":
 		return "scanner-404"
+	case strings.Contains(strings.ToLower(result.Policy.Name), "scanner") || strings.Contains(strings.ToLower(result.Policy.Name), "bot"):
+		return "scanner-bot"
 	case strings.HasPrefix(scope, "login-failure"):
 		return "login-bruteforce"
 	default:
 		return "cc"
 	}
+}
+
+func detectScannerProbe(req pipeline.Request) pipeline.Result {
+	ua := strings.ToLower(req.Headers.Get("User-Agent"))
+	path := strings.ToLower(strings.Split(req.Path, "?")[0])
+	needles := []string{"sqlmap", "nuclei", "nikto", "dirsearch", "gobuster", "zgrab", "wpscan", "acunetix", "nessus", "masscan"}
+	for _, needle := range needles {
+		if strings.Contains(ua, needle) {
+			return scannerPipelineResult("scanner user-agent", needle, req.Path)
+		}
+	}
+	probePaths := []string{"/.env", "/wp-admin/install.php", "/.git/config", "/server-status", "/phpinfo.php", "/vendor/phpunit", "/cgi-bin/"}
+	for _, probePath := range probePaths {
+		if strings.HasPrefix(path, probePath) || path == probePath {
+			return scannerPipelineResult("scanner probe path", probePath, req.Path)
+		}
+	}
+	return pipeline.Result{}
+}
+
+func scannerPipelineResult(reason, signature, requestPath string) pipeline.Result {
+	message := fmt.Sprintf("%s signature=%s path=%s", reason, signature, requestPath)
+	return pipeline.Result{Decision: pipeline.DecisionBlock, Reason: reason, BlockedByStage: "detection", Detection: detection.Result{Score: 7, Severity: "high", Matches: []detection.MatchedRule{{ID: 913152, Message: message, Source: "builtin:scanner-bot", Group: "scanner", Severity: "high", Score: 7, Action: detection.RuleActionDeny}}}}
 }
 
 func (s *Server) disabledRuleIDsForSite(siteID uint) map[int]bool {

@@ -2747,10 +2747,29 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] sqlmap/nuclei/nikto UA 或典型路径探测能被识别并记录。
-- [ ] 404 高频触发后可 temp-block，解封后恢复访问。
-- [ ] 登录失败策略只影响指定登录路径，不误伤其它路径。
-- [ ] 前端封禁列表与 runtime 状态一致。
+- [x] sqlmap/nuclei/nikto UA 或典型路径探测能被识别并记录。
+- [x] 404 高频触发后可 temp-block，解封后恢复访问。
+- [x] 登录失败策略只影响指定登录路径，不误伤其它路径。
+- [x] 前端封禁列表与 runtime 状态一致。
+
+**完成记录（2026-07-01）：**
+
+- `internal/httpserver/server.go` 新增轻量 scanner probe 闭环：在未开启 CC 策略链时识别 `sqlmap/nuclei/nikto/zgrab/wpscan/acunetix/nessus/masscan` 等 UA 指纹和 `/.env`、`/.git/config`、`/wp-admin/install.php`、`/server-status`、`/phpinfo.php`、`/vendor/phpunit`、`/cgi-bin/` 等典型路径探测，输出 `builtin:scanner-bot`、`group=scanner`、规则 ID `913152`，并落攻击日志。
+- CC/Bot runtime 保持 T135 的 404 扫描、登录失败、UA 高频与动作链能力；本批扩展 `internal/cc/limiter.go` 的 active block runtime metadata，封禁列表可展示 `remainingSeconds`、`recentPath`、`userAgent`，并保留手动解封能力。
+- `internal/httpserver/console_api.go` 扩展 `/api/protection/cc-events`：支持 `attackType` 过滤，并新增 `/trend`、`/top-ip`、`/top-ua`、`/top-path` 聚合接口，数据来自真实 `AttackLog`，可支撑前端 Bot/Scanner 趋势与 Top 统计。
+- 新增 `internal/httpserver/t152_scanner_bot_test.go`：覆盖 scanner UA/路径探测识别与记录、scanner 过滤、CC active block runtime metadata、scanner 趋势/Top IP/Top UA/Top Path 聚合；同时回归 T135 确认 404 temp-block 解封、登录路径隔离、动作链未退化。
+- `docs/security-coverage-report.md` 已重新生成；当前安全回归仍为 12 个规则文件、564 条 SecRule、攻击阻断率 90.41%（66/73）、良性误报 0/67。
+
+**验证命令：**
+
+- `gofmt -w internal/cc/limiter.go internal/httpserver/server.go internal/httpserver/console_api.go internal/httpserver/t152_scanner_bot_test.go` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/cc ./internal/httpserver -run 'TestT152|TestT135|TestT125' -count=1` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/detection ./internal/pipeline ./internal/httpserver ./internal/auditlog -count=1` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./... -count=1` 通过。
+- `cd web && npm run build` 通过（仅既有 Rollup pure annotation 与 chunk-size 警告）。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go run ./cmd/aegis-securityeval -out docs/security-coverage-report.md` 通过。
+
+**下一任务：** T153：文件上传、WebShell 与内容检测闭环。
 
 #### T153：文件上传、WebShell 与内容检测闭环
 

@@ -857,6 +857,9 @@ func mergeParsedArgs(args map[string][]string, parsed requestparser.ParsedReques
 		case "json":
 			addUnique("json."+field.Name, field.NormalizedValue)
 		}
+		if strings.HasPrefix(field.Variable, "FILES:") {
+			addUnique(strings.TrimPrefix(field.Variable, "FILES:"), field.NormalizedValue)
+		}
 	}
 }
 
@@ -937,14 +940,6 @@ func mergeMultipartArgs(args map[string][]string, body []byte, boundary string) 
 			addArg(args, key, value)
 		}
 	}
-	for key, files := range form.File {
-		for _, file := range files {
-			addArg(args, key, file.Filename)
-			if file.Header.Get("Content-Type") != "" {
-				addArg(args, key+".content_type", file.Header.Get("Content-Type"))
-			}
-		}
-	}
 }
 
 func mergeFormURLEncodedArgs(args map[string][]string, body []byte) {
@@ -972,7 +967,7 @@ func joinArgKey(parent, child string) string {
 
 func addArg(args map[string][]string, key, value string) {
 	key = strings.TrimSpace(key)
-	if key == "" || strings.HasSuffix(key, ".content_type") {
+	if key == "" {
 		return
 	}
 	args[key] = append(args[key], value)

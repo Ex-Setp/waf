@@ -689,6 +689,8 @@ func normalizeRuleGroup(value string) string {
 func inferRuleGroup(source string) string {
 	name := strings.ToLower(filepath.Base(source))
 	switch {
+	case strings.Contains(name, "upload") || strings.Contains(name, "907"):
+		return "upload"
 	case strings.Contains(name, "sqli") || strings.Contains(name, "942"):
 		return "sqli"
 	case strings.Contains(name, "xss") || strings.Contains(name, "941"):

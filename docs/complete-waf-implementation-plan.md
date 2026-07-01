@@ -2791,10 +2791,30 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] `.php`、`.jpg.php`、JSP/ASP WebShell 样本被拦截。
-- [ ] 正常图片/文档上传不误拦。
-- [ ] 文件名路径穿越被拦截。
-- [ ] 上传日志不保存完整文件内容。
+- [x] `.php`、`.jpg.php`、JSP/ASP WebShell 样本被拦截。
+- [x] 正常图片/文档上传不误拦。
+- [x] 文件名路径穿越被拦截。
+- [x] 上传日志不保存完整文件内容。
+
+**完成记录（2026-07-01）：**
+
+- `internal/requestparser/requestparser.go` 扩展 multipart 文件解析：提取安全文件名、扩展名、Content-Type、magic、受限 snippet 与风险字段；snippet 仅读取前 4KB 并限制输出长度，避免完整上传内容进入检测字段或日志。
+- `internal/httpserver/server.go` 将 `FILES:*` 元数据合并进检测 Args，并停止旧 multipart 文件名直塞逻辑，确保上传检测使用 parser 产出的受限证据。
+- `internal/detection/semantic.go` 扩展 upload semantic evidence：识别 `path_traversal`、`executable_extension`、`double_extension`、`content_type_mismatch`、`webshell_code` 等结构化风险；真实 multipart 且已解析 Args 时不再把完整 body 拼进语义证据。
+- `rules/REQUEST-907-UPLOAD-WEBSHELL.conf` 升级为 T153 upload/webshell 规则包：覆盖路径穿越、可执行后缀、双后缀、Content-Type/magic mismatch、PHP/JSP/ASPX WebShell 片段与既有 stub 指标；规则组归类为 upload/webshell。
+- 新增/更新测试：`internal/requestparser/requestparser_test.go`、`internal/detection/semantic_test.go`、`internal/httpserver/t153_upload_webshell_test.go` 覆盖文件元数据提取、PHP/JSP/ASPX/WebShell 拦截、路径穿越、magic mismatch、日志脱敏和正常图片/文档上传不误拦。
+- `docs/security-coverage-report.md` 已重新生成；当前安全回归为 12 个规则文件、570 条 SecRule、攻击阻断率 90.41%（66/73）、良性误报 0/67。
+
+**验证命令：**
+
+- `gofmt -w internal/requestparser/requestparser.go internal/requestparser/requestparser_test.go internal/detection/manager.go internal/detection/semantic.go internal/detection/semantic_test.go internal/httpserver/server.go internal/httpserver/t153_upload_webshell_test.go` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/requestparser ./internal/detection ./internal/pipeline ./internal/httpserver -run 'TestT153|TestRequestParser|TestSemantic|TestT149|TestT151' -count=1` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/detection ./internal/pipeline ./internal/httpserver ./internal/auditlog -count=1` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./... -count=1` 通过。
+- `cd web && npm run build` 通过（仅既有 Rollup pure annotation 与 chunk-size 警告）。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go run ./cmd/aegis-securityeval -out docs/security-coverage-report.md` 通过。
+
+**下一任务：** T154：协议异常、请求走私与 API 安全增强。
 
 #### T154：协议异常、请求走私与 API 安全增强
 

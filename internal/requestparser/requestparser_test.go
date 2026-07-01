@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"testing"
 )
@@ -74,6 +75,76 @@ func TestParseFormAndMultipartFields(t *testing.T) {
 	if strings.Contains(fileField.RawValue, "file contents") || strings.Contains(fileField.NormalizedValue, "file contents") {
 		t.Fatalf("file content leaked in file metadata field: %#v", fileField)
 	}
+	if field := findField(multipartParsed.Fields, "multipart", "FILES:avatar.extension"); field == nil || field.NormalizedValue != ".php" {
+		t.Fatalf("file extension field = %#v, want .php", field)
+	}
+	if field := findField(multipartParsed.Fields, "multipart", "FILES:avatar.content_type"); field == nil || field.NormalizedValue != "application/octet-stream" {
+		t.Fatalf("content type field = %#v", field)
+	}
+	if field := findField(multipartParsed.Fields, "multipart", "FILES:avatar.snippet"); field == nil || !strings.Contains(field.NormalizedValue, "file contents must not be expose") {
+		t.Fatalf("snippet field = %#v", field)
+	}
+	if field := findField(multipartParsed.Fields, "multipart", "FILES:avatar.risk"); field == nil || field.NormalizedValue != "executable_extension" {
+		t.Fatalf("risk field = %#v, want executable_extension", field)
+	}
+}
+
+func TestParseMultipartFileMetadataSignals(t *testing.T) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("payload", `..\..\shell.jpg.php`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("<?php echo shell_exec($_GET['cmd']); ?>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed := Parse("POST", "/upload", http.Header{"Content-Type": []string{writer.FormDataContentType()}}, buf.Bytes(), Options{})
+	if field := findField(parsed.Fields, "multipart", "FILES:payload"); field == nil || field.NormalizedValue != "shell.jpg.php" {
+		t.Fatalf("safe file field = %#v, want shell.jpg.php", field)
+	}
+	if field := findField(parsed.Fields, "multipart", "FILES:payload.magic"); field == nil || field.NormalizedValue != "php" {
+		t.Fatalf("magic field = %#v, want php", field)
+	}
+	if !hasFieldValue(parsed.Fields, "FILES:payload.risk", "path_traversal") {
+		t.Fatalf("missing path traversal risk: %#v", parsed.Fields)
+	}
+	if !hasFieldValue(parsed.Fields, "FILES:payload.risk", "double_extension") {
+		t.Fatalf("missing double extension risk: %#v", parsed.Fields)
+	}
+	if !hasFieldValue(parsed.Fields, "FILES:payload.risk", "webshell_code") {
+		t.Fatalf("missing webshell code risk: %#v", parsed.Fields)
+	}
+}
+
+func TestParseMultipartMagicMismatch(t *testing.T) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition", `form-data; name="upload"; filename="avatar.png"`)
+	header.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("%PDF-1.5 benign report")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed := Parse("POST", "/upload", http.Header{"Content-Type": []string{writer.FormDataContentType()}}, buf.Bytes(), Options{})
+	if field := findField(parsed.Fields, "multipart", "FILES:upload.magic"); field == nil || field.NormalizedValue != "pdf" {
+		t.Fatalf("magic field = %#v, want pdf", field)
+	}
+	if !hasFieldValue(parsed.Fields, "FILES:upload.risk", "content_type_mismatch") {
+		t.Fatalf("missing mismatch risk: %#v", parsed.Fields)
+	}
 }
 
 func TestParseBodyTooLargeModes(t *testing.T) {
@@ -108,4 +179,13 @@ func findField(fields []ParsedField, source, variable string) *ParsedField {
 		}
 	}
 	return nil
+}
+
+func hasFieldValue(fields []ParsedField, variable, want string) bool {
+	for _, field := range fields {
+		if field.Variable == variable && field.NormalizedValue == want {
+			return true
+		}
+	}
+	return false
 }

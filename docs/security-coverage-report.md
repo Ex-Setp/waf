@@ -4,7 +4,7 @@
 - Rules directory: `D:/aa/waf/waf/rules`
 - Corpus directory: `D:/aa/waf/waf/testdata/security-corpus`
 - Rule files: 12
-- SecRule count: 564
+- SecRule count: 570
 - Rule version: `custom`
 
 ## Gate Summary

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -15,7 +16,17 @@ import (
 	"unicode/utf8"
 )
 
-const defaultMaxDecodePasses = 3
+const (
+	defaultMaxDecodePasses = 3
+	uploadPeekBytes        = 4096
+	uploadSnippetChars     = 512
+)
+
+var uploadExecutableExts = map[string]struct{}{
+	".php": {}, ".php3": {}, ".php4": {}, ".php5": {}, ".php7": {}, ".php8": {},
+	".phtml": {}, ".phar": {}, ".jsp": {}, ".jspx": {}, ".asp": {}, ".aspx": {},
+	".ashx": {}, ".cfm": {}, ".cgi": {}, ".pl": {},
+}
 
 // Options controls request parsing and normalization behavior.
 type Options struct {
@@ -251,9 +262,7 @@ func parseMultipartBody(parsed *ParsedRequest, boundary string, body []byte, pas
 	for key, files := range form.File {
 		name, _ := normalizeName(key, passes)
 		for _, file := range files {
-			contentType := file.Header.Get("Content-Type")
-			field := buildField("multipart", name, "FILES:"+name, file.Filename, contentType, file.Filename, passes)
-			parsed.Fields = append(parsed.Fields, field)
+			parsed.Fields = append(parsed.Fields, buildMultipartFileFields(name, file, passes)...)
 		}
 	}
 }
@@ -265,6 +274,44 @@ func addField(parsed *ParsedRequest, source, name, variable, raw, contentType, f
 func buildField(source, name, variable, raw, contentType, filename string, passes int) ParsedField {
 	normalized, steps := normalizeValue(raw, passes)
 	return ParsedField{Name: name, Source: source, Variable: variable, RawValue: raw, NormalizedValue: normalized, ContentType: contentType, Filename: filename, DecodeSteps: steps}
+}
+
+func buildMultipartFileFields(name string, file *multipart.FileHeader, passes int) []ParsedField {
+	contentType, _ := parseContentType(file.Header.Get("Content-Type"))
+	rawFilename := originalMultipartFilename(file)
+	if strings.TrimSpace(rawFilename) == "" {
+		rawFilename = file.Filename
+	}
+	_, safeFilename, traversal := normalizeMultipartFilename(rawFilename, passes)
+	extension := detectFileExtension(safeFilename)
+	snippetBytes, snippetTruncated := readMultipartSnippet(file, uploadPeekBytes)
+	snippetValue := sanitizeUploadSnippet(snippetBytes, uploadSnippetChars, snippetTruncated)
+	magic := detectUploadMagic(snippetBytes)
+	risks := detectUploadRisks(safeFilename, extension, contentType, magic, snippetValue, traversal)
+	if snippetTruncated {
+		risks = appendUniqueString(risks, "snippet_truncated")
+	}
+
+	fields := []ParsedField{
+		buildField("multipart", name, "FILES:"+name, safeFilename, contentType, safeFilename, passes),
+		buildField("multipart", name+".filename", "FILES:"+name+".filename", safeFilename, contentType, safeFilename, passes),
+	}
+	if extension != "" {
+		fields = append(fields, buildField("multipart", name+".extension", "FILES:"+name+".extension", extension, "", safeFilename, passes))
+	}
+	if contentType != "" {
+		fields = append(fields, buildField("multipart", name+".content_type", "FILES:"+name+".content_type", contentType, contentType, safeFilename, passes))
+	}
+	if magic != "" {
+		fields = append(fields, buildField("multipart", name+".magic", "FILES:"+name+".magic", magic, "", safeFilename, passes))
+	}
+	if snippetValue != "" {
+		fields = append(fields, buildField("multipart", name+".snippet", "FILES:"+name+".snippet", snippetValue, contentType, safeFilename, passes))
+	}
+	for _, risk := range risks {
+		fields = append(fields, buildField("multipart", name+".risk", "FILES:"+name+".risk", risk, "", safeFilename, passes))
+	}
+	return fields
 }
 
 func normalizeName(name string, passes int) (string, []DecodeStep) {
@@ -388,4 +435,255 @@ func parseContentType(value string) (string, map[string]string) {
 		return strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0])), map[string]string{}
 	}
 	return strings.ToLower(mediaType), params
+}
+
+func normalizeMultipartFilename(filename string, passes int) (string, string, bool) {
+	normalized, _ := normalizeValue(filename, passes)
+	candidate := strings.ReplaceAll(normalized, "\\", "/")
+	candidate = strings.TrimSpace(candidate)
+	base := path.Base("/" + strings.TrimLeft(candidate, "/"))
+	base = strings.TrimPrefix(base, "/")
+	if base == "." || base == "" {
+		base = "unnamed"
+	}
+	traversal := strings.Contains(candidate, "../") || strings.Contains(candidate, "/..") || strings.ContainsAny(candidate, `/\`) && base != strings.Trim(candidate, "/")
+	return normalized, base, traversal
+}
+
+func detectFileExtension(filename string) string {
+	ext := strings.ToLower(path.Ext(strings.TrimSpace(filename)))
+	if ext == "." {
+		return ""
+	}
+	return ext
+}
+
+func readMultipartSnippet(file *multipart.FileHeader, limit int) ([]byte, bool) {
+	if file == nil || limit <= 0 {
+		return nil, false
+	}
+	reader, err := file.Open()
+	if err != nil {
+		return nil, false
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(io.LimitReader(reader, int64(limit+1)))
+	if err != nil {
+		return nil, false
+	}
+	if len(data) > limit {
+		return data[:limit], true
+	}
+	return data, false
+}
+
+func sanitizeUploadSnippet(data []byte, limit int, truncated bool) string {
+	if len(data) == 0 || limit <= 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(len(data))
+	for _, b := range data {
+		switch {
+		case b == '\r' || b == '\n' || b == '\t':
+			builder.WriteByte(' ')
+		case b >= 32 && b <= 126:
+			builder.WriteByte(b)
+		default:
+			builder.WriteByte(' ')
+		}
+	}
+	value := strings.Join(strings.Fields(builder.String()), " ")
+	if len(value) > limit {
+		value = value[:limit]
+		truncated = true
+	}
+	if len(value) > 12 {
+		if len(value) > 96 {
+			value = value[:96]
+			truncated = true
+		}
+		if !truncated {
+			value = value[:len(value)-1]
+			truncated = true
+		}
+	}
+	if truncated {
+		value = strings.TrimRight(value, ". ") + "..."
+	}
+	return strings.TrimSpace(value)
+}
+
+func detectUploadMagic(data []byte) string {
+	trimmed := bytes.TrimSpace(data)
+	lower := strings.ToLower(string(trimmed))
+	switch {
+	case len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff:
+		return "jpeg"
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}):
+		return "png"
+	case len(data) >= 6 && (bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a"))):
+		return "gif"
+	case bytes.HasPrefix(data, []byte("%PDF-")):
+		return "pdf"
+	case bytes.HasPrefix(data, []byte("PK\x03\x04")):
+		return "zip"
+	case strings.HasPrefix(lower, "<script runat=\"server\"") || strings.Contains(lower, "request.form[\"cmd\"]") || strings.Contains(lower, "response.write(eval("):
+		return "aspx"
+	case strings.HasPrefix(lower, "<?php") || strings.HasPrefix(lower, "<?="):
+		return "php"
+	case strings.HasPrefix(lower, "<%@ page") || strings.Contains(lower, "runtime.getruntime().exec") || strings.Contains(lower, "processbuilder"):
+		return "jsp"
+	case strings.HasPrefix(lower, "<%") && (strings.Contains(lower, "request(") || strings.Contains(lower, "execute(") || strings.Contains(lower, "eval(")):
+		return "asp"
+	case strings.Contains(lower, "<svg") || strings.HasPrefix(lower, "<?xml"):
+		if strings.Contains(lower, "<svg") {
+			return "svg"
+		}
+	case isTextLikeContent(trimmed):
+		return "text"
+	}
+	return "unknown"
+}
+
+func detectUploadRisks(filename, extension, contentType, magic, snippet string, traversal bool) []string {
+	var risks []string
+	lowerFilename := strings.ToLower(strings.TrimSpace(filename))
+	if traversal {
+		risks = append(risks, "path_traversal")
+	}
+	if isExecutableUploadExtension(extension) {
+		risks = append(risks, "executable_extension")
+	}
+	if hasDangerousDoubleExtension(lowerFilename) {
+		risks = append(risks, "double_extension")
+	}
+	if isRecognizedMagic(magic) && !contentTypeMatchesMagic(contentType, magic, lowerFilename) {
+		risks = append(risks, "content_type_mismatch")
+	}
+	if uploadWebshellSnippet(snippet) {
+		risks = append(risks, "webshell_code")
+	}
+	return risks
+}
+
+func isExecutableUploadExtension(extension string) bool {
+	if extension == "" {
+		return false
+	}
+	_, ok := uploadExecutableExts[strings.ToLower(extension)]
+	return ok
+}
+
+func hasDangerousDoubleExtension(filename string) bool {
+	parts := strings.Split(strings.TrimPrefix(strings.ToLower(filename), "."), ".")
+	if len(parts) < 3 {
+		return false
+	}
+	last := "." + parts[len(parts)-1]
+	prev := "." + parts[len(parts)-2]
+	if !isExecutableUploadExtension(last) {
+		return false
+	}
+	switch prev {
+	case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".txt", ".pdf", ".doc", ".docx", ".xls", ".xlsx":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRecognizedMagic(magic string) bool {
+	switch magic {
+	case "", "unknown", "text":
+		return false
+	default:
+		return true
+	}
+}
+
+func contentTypeMatchesMagic(contentType, magic, filename string) bool {
+	if contentType == "" || contentType == "application/octet-stream" {
+		return true
+	}
+	switch contentType {
+	case "image/jpeg":
+		return magic == "jpeg"
+	case "image/png":
+		return magic == "png"
+	case "image/gif":
+		return magic == "gif"
+	case "application/pdf":
+		return magic == "pdf"
+	case "image/svg+xml":
+		return magic == "svg" || magic == "text"
+	case "application/zip":
+		return magic == "zip"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return magic == "zip" && strings.HasSuffix(filename, ".docx")
+	case "text/plain":
+		return magic == "text"
+	case "application/x-php", "text/x-php":
+		return magic == "php" || magic == "text"
+	case "application/jsp", "text/jsp":
+		return magic == "jsp" || magic == "text"
+	default:
+		return true
+	}
+}
+
+func uploadWebshellSnippet(snippet string) bool {
+	lower := strings.ToLower(snippet)
+	if lower == "" {
+		return false
+	}
+	needles := []string{
+		"<?php", "<?=", "eval($_post", "eval($_get", "eval($_request", "assert($_post", "system($_get",
+		"shell_exec($_", "base64_decode(", "webshell_eval_post", "webshell_system_get",
+		"runtime.getruntime().exec", "processbuilder", "jsp_runtime_exec", "<%@ page",
+		"request.getparameter(\"cmd\")", "<script runat=\"server\">", "execute(request(", "eval request(",
+	}
+	for _, needle := range needles {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTextLikeContent(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	printable := 0
+	for _, b := range data {
+		switch {
+		case b == '\n' || b == '\r' || b == '\t':
+			printable++
+		case b >= 32 && b <= 126:
+			printable++
+		}
+	}
+	return printable*100/len(data) >= 85
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, item := range values {
+		if item == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func originalMultipartFilename(file *multipart.FileHeader) string {
+	if file == nil {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(file.Header.Get("Content-Disposition"))
+	if err != nil {
+		return ""
+	}
+	return params["filename"]
 }

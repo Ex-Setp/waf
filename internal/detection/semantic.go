@@ -75,6 +75,7 @@ var (
 	webshellExtPattern     = regexp.MustCompile("(?i)\\.(?:php\\d*|phtml|phar|jsp|jspx|asp|aspx|ashx|cfm|cgi|pl)(?:[\\s\"';?]|$)")
 	webshellCodePattern    = regexp.MustCompile(`(?i)(?:<\?php|<%@\s*page|eval\s*\(\s*\$_(?:post|get|request|cookie)|assert\s*\(\s*\$_(?:post|get|request)|system\s*\(\s*\$_(?:post|get|request)|shell_exec\s*\(\s*\$_(?:post|get|request)|base64_decode\s*\(|Runtime\.getRuntime\(\)\.exec|ProcessBuilder)`)
 	doubleExtPattern       = regexp.MustCompile(`(?i)\.(?:jpg|jpeg|png|gif|txt|pdf|doc|docx)\.(?:php\d*|phtml|jsp|jspx|asp|aspx|ashx|cgi|pl)\b`)
+	uploadRiskPattern      = regexp.MustCompile(`(?i)\b(?:path_traversal|executable_extension|double_extension|content_type_mismatch|webshell_code)\b`)
 	protoSchemePattern     = regexp.MustCompile(`(?i)\b(?:gopher|php|phar|expect|jar|dict|ldap|tftp|data):(?://)?`)
 	protoCarrierPattern    = regexp.MustCompile(`(?i)\b(?:url|uri|resource|target|redirect|callback|next|service|endpoint|proxy|stream|schema|transport|dsn|include|load|open)\b`)
 	protoExploitPattern    = regexp.MustCompile(`(?i)(?:php://filter/.+resource=|phar://|expect://|gopher://|dict://|jar:(?:https?|file):|data:(?:text/html|application/xhtml|image/svg\+xml))`)
@@ -533,6 +534,8 @@ func analyzeUploadChop(parts []string) chopResult {
 	hasWebshellExt := false
 	hasWebshellCode := false
 	hasDoubleExt := false
+	hasPathTraversal := false
+	hasContentMismatch := false
 	for _, part := range parts {
 		normalized := normalizeSemanticValue(part)
 		if normalized == "" {
@@ -548,6 +551,10 @@ func analyzeUploadChop(parts []string) chopResult {
 			evidence["structure:multipart_filename"] = true
 			hasFilename = true
 		}
+		if strings.Contains(normalizedLower, ".filename") {
+			evidence["structure:file_metadata"] = true
+			hasFilename = true
+		}
 		if webshellExtPattern.MatchString(normalized) {
 			evidence["token:webshell_extension"] = true
 			hasWebshellExt = true
@@ -560,11 +567,34 @@ func analyzeUploadChop(parts []string) chopResult {
 			evidence["structure:double_extension"] = true
 			hasDoubleExt = true
 		}
+		if uploadRiskPattern.MatchString(normalized) {
+			evidence["structure:file_risk"] = true
+			if strings.Contains(normalizedLower, "path_traversal") {
+				evidence["structure:path_traversal"] = true
+				hasPathTraversal = true
+			}
+			if strings.Contains(normalizedLower, "content_type_mismatch") {
+				evidence["structure:content_type_mismatch"] = true
+				hasContentMismatch = true
+			}
+			if strings.Contains(normalizedLower, "executable_extension") {
+				evidence["token:webshell_extension"] = true
+				hasWebshellExt = true
+			}
+			if strings.Contains(normalizedLower, "double_extension") {
+				evidence["structure:double_extension"] = true
+				hasDoubleExt = true
+			}
+			if strings.Contains(normalizedLower, "webshell_code") {
+				evidence["token:webshell_code"] = true
+				hasWebshellCode = true
+			}
+		}
 		if hasEncodedIndicators(part) && len(evidence) > 0 {
 			evidence["normalization:encoded_payload"] = true
 		}
 	}
-	if !((hasWebshellCode && (hasWebshellExt || hasFilename || hasUploadCarrier)) || (hasDoubleExt && (hasFilename || hasUploadCarrier))) {
+	if !(hasPathTraversal || hasContentMismatch || (hasWebshellCode && (hasWebshellExt || hasFilename || hasUploadCarrier)) || (hasDoubleExt && (hasFilename || hasUploadCarrier)) || (hasWebshellExt && (hasFilename || hasUploadCarrier))) {
 		return chopResult{}
 	}
 	list := sortedEvidence(evidence)
@@ -724,7 +754,10 @@ func requestParts(req Request) []string {
 	}
 	appendPart(req.Method)
 	appendPart(req.URI)
-	appendPart(req.Body)
+	contentType := strings.ToLower(req.Headers.Get("Content-Type"))
+	if !(strings.Contains(contentType, "multipart/form-data") && len(req.Args) > 0) {
+		appendPart(req.Body)
+	}
 	for _, key := range sortedKeys(req.Args) {
 		appendPart(key)
 		for _, value := range req.Args[key] {

@@ -2,6 +2,7 @@ package requestparser
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -9,8 +10,10 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -27,6 +30,8 @@ var uploadExecutableExts = map[string]struct{}{
 	".phtml": {}, ".phar": {}, ".jsp": {}, ".jspx": {}, ".asp": {}, ".aspx": {},
 	".ashx": {}, ".cfm": {}, ".cgi": {}, ".pl": {},
 }
+
+var graphqlAliasPattern = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\s*:\s*(?:__schema|__type|[A-Za-z_][A-Za-z0-9_]*)`)
 
 // Options controls request parsing and normalization behavior.
 type Options struct {
@@ -123,6 +128,7 @@ func Parse(method, requestURI string, headers http.Header, body []byte, opts Opt
 		return parsed
 	}
 	parseBody(&parsed, mediaType, params, body, passes)
+	enrichRequestMetadata(&parsed, headers, mediaType, body, passes)
 	return parsed
 }
 
@@ -221,6 +227,9 @@ func flattenJSON(parsed *ParsedRequest, prefix string, value any, passes int) {
 			if prefix != "" {
 				name = prefix + "." + key
 			}
+			if shouldMarkJSONKey(key, child) {
+				addField(parsed, "json", name, "JSON:"+name, jsonKeyMarkerValue(child), "", "", passes)
+			}
 			flattenJSON(parsed, name, child, passes)
 		}
 	case []any:
@@ -241,6 +250,28 @@ func flattenJSON(parsed *ParsedRequest, prefix string, value any, passes int) {
 	}
 }
 
+func shouldMarkJSONKey(key string, value any) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "__proto__", "prototype", "constructor":
+		switch value.(type) {
+		case map[string]any, []any:
+			return true
+		}
+	}
+	return false
+}
+
+func jsonKeyMarkerValue(value any) string {
+	switch value.(type) {
+	case []any:
+		return "[array]"
+	case map[string]any:
+		return "[object]"
+	default:
+		return "[value]"
+	}
+}
+
 func parseMultipartBody(parsed *ParsedRequest, boundary string, body []byte, passes int) {
 	if strings.TrimSpace(boundary) == "" {
 		parsed.ParseErrors = append(parsed.ParseErrors, ParseError{Source: "multipart", Message: "missing boundary"})
@@ -249,6 +280,9 @@ func parseMultipartBody(parsed *ParsedRequest, boundary string, body []byte, pas
 	reader := multipart.NewReader(bytes.NewReader(body), boundary)
 	form, err := reader.ReadForm(1 << 20)
 	if err != nil {
+		if recovered := parseMultipartBodyLenient(parsed, boundary, body, passes); recovered {
+			return
+		}
 		parsed.ParseErrors = append(parsed.ParseErrors, ParseError{Source: "multipart", Message: err.Error()})
 		return
 	}
@@ -267,8 +301,167 @@ func parseMultipartBody(parsed *ParsedRequest, boundary string, body []byte, pas
 	}
 }
 
+func parseMultipartBodyLenient(parsed *ParsedRequest, boundary string, body []byte, passes int) bool {
+	segments := strings.Split(string(body), "--"+boundary)
+	recovered := false
+	for _, segment := range segments {
+		segment = strings.TrimLeft(segment, "\r\n")
+		segment = strings.TrimRight(segment, "\r\n")
+		if segment == "" || segment == "--" {
+			continue
+		}
+		if strings.HasSuffix(segment, "--") {
+			segment = strings.TrimSuffix(segment, "--")
+			segment = strings.TrimRight(segment, "\r\n")
+		}
+		headerBlock, content, ok := splitMultipartSegment(segment)
+		if !ok {
+			continue
+		}
+		headers := parseMultipartHeaders(headerBlock)
+		disposition := headers.Get("Content-Disposition")
+		if disposition == "" {
+			continue
+		}
+		_, params, err := mime.ParseMediaType(disposition)
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(params["name"])
+		if name == "" {
+			continue
+		}
+		name, _ = normalizeName(name, passes)
+		filename := strings.TrimSpace(params["filename"])
+		if filename != "" {
+			parsed.Fields = append(parsed.Fields, buildLenientMultipartFileFields(name, filename, headers.Get("Content-Type"), content, passes)...)
+			recovered = true
+			continue
+		}
+		addField(parsed, "multipart", name, "ARGS:"+name, content, "", "", passes)
+		recovered = true
+	}
+	if recovered {
+		parsed.ParseErrors = append(parsed.ParseErrors, ParseError{Source: "multipart", Message: "recovered malformed multipart body with lenient parser"})
+	}
+	return recovered
+}
+
+func splitMultipartSegment(segment string) (string, string, bool) {
+	for _, delimiter := range []string{"\r\n\r\n", "\n\n"} {
+		if idx := strings.Index(segment, delimiter); idx >= 0 {
+			headers := segment[:idx]
+			content := segment[idx+len(delimiter):]
+			return headers, strings.TrimRight(content, "\r\n"), true
+		}
+	}
+	return "", "", false
+}
+
+func parseMultipartHeaders(block string) textproto.MIMEHeader {
+	headers := textproto.MIMEHeader{}
+	for _, line := range strings.Split(strings.ReplaceAll(block, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		headers.Add(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(key)), strings.TrimSpace(value))
+	}
+	return headers
+}
+
+func buildLenientMultipartFileFields(name, filename, contentType, content string, passes int) []ParsedField {
+	rawFilename := filename
+	if strings.TrimSpace(rawFilename) == "" {
+		rawFilename = "unnamed"
+	}
+	contentType, _ = parseContentType(contentType)
+	_, safeFilename, traversal := normalizeMultipartFilename(rawFilename, passes)
+	extension := detectFileExtension(safeFilename)
+	snippetBytes := []byte(content)
+	truncated := false
+	if len(snippetBytes) > uploadPeekBytes {
+		snippetBytes = snippetBytes[:uploadPeekBytes]
+		truncated = true
+	}
+	snippetValue := sanitizeUploadSnippet(snippetBytes, uploadSnippetChars, truncated)
+	magic := detectUploadMagic(snippetBytes)
+	risks := detectUploadRisks(safeFilename, extension, contentType, magic, snippetValue, traversal)
+	if truncated {
+		risks = appendUniqueString(risks, "snippet_truncated")
+	}
+
+	fields := []ParsedField{
+		buildField("multipart", name, "FILES:"+name, safeFilename, contentType, safeFilename, passes),
+		buildField("multipart", name+".filename", "FILES:"+name+".filename", safeFilename, contentType, safeFilename, passes),
+	}
+	if extension != "" {
+		fields = append(fields, buildField("multipart", name+".extension", "FILES:"+name+".extension", extension, "", safeFilename, passes))
+	}
+	if contentType != "" {
+		fields = append(fields, buildField("multipart", name+".content_type", "FILES:"+name+".content_type", contentType, contentType, safeFilename, passes))
+	}
+	if magic != "" {
+		fields = append(fields, buildField("multipart", name+".magic", "FILES:"+name+".magic", magic, "", safeFilename, passes))
+	}
+	if snippetValue != "" {
+		fields = append(fields, buildField("multipart", name+".snippet", "FILES:"+name+".snippet", snippetValue, contentType, safeFilename, passes))
+	}
+	for _, risk := range risks {
+		fields = append(fields, buildField("multipart", name+".risk", "FILES:"+name+".risk", risk, "", safeFilename, passes))
+	}
+	return fields
+}
+
 func addField(parsed *ParsedRequest, source, name, variable, raw, contentType, filename string, passes int) {
 	parsed.Fields = append(parsed.Fields, buildField(source, name, variable, raw, contentType, filename, passes))
+}
+
+// MergeFieldsIntoArgs folds parsed request fields into a flat args map so rules can
+// target normalized body-derived values with exact names such as json.profile.bio.
+func MergeFieldsIntoArgs(args map[string][]string, parsed ParsedRequest) {
+	if args == nil {
+		return
+	}
+	seen := map[string]map[string]bool{}
+	for key, values := range args {
+		seen[key] = map[string]bool{}
+		for _, value := range values {
+			seen[key][value] = true
+		}
+	}
+	addUnique := func(key, value string) {
+		if strings.TrimSpace(key) == "" || value == "" {
+			return
+		}
+		if seen[key] == nil {
+			seen[key] = map[string]bool{}
+		}
+		if seen[key][value] {
+			return
+		}
+		seen[key][value] = true
+		args[key] = append(args[key], value)
+	}
+	for _, field := range parsed.Fields {
+		switch field.Source {
+		case "query", "form", "multipart", "request", "meta":
+			addUnique(field.Name, field.NormalizedValue)
+		case "json":
+			addUnique("json."+field.Name, field.NormalizedValue)
+		case "graphql":
+			addUnique("graphql."+field.Name, field.NormalizedValue)
+		case "jwt":
+			addUnique("jwt."+field.Name, field.NormalizedValue)
+		}
+		if strings.HasPrefix(field.Variable, "FILES:") {
+			addUnique(strings.TrimPrefix(field.Variable, "FILES:"), field.NormalizedValue)
+		}
+	}
 }
 
 func buildField(source, name, variable, raw, contentType, filename string, passes int) ParsedField {
@@ -686,4 +879,216 @@ func originalMultipartFilename(file *multipart.FileHeader) string {
 		return ""
 	}
 	return params["filename"]
+}
+
+func enrichRequestMetadata(parsed *ParsedRequest, headers http.Header, mediaType string, body []byte, passes int) {
+	addField(parsed, "request", "request.method", "REQUEST_METHOD", parsed.Method, "", "", passes)
+	addField(parsed, "request", "request.uri", "REQUEST_URI", parsed.RawURI, "", "", passes)
+	addField(parsed, "request", "request.path", "REQUEST_PATH", parsed.Path, "", "", passes)
+	addMetaField := func(name string, value int) {
+		addField(parsed, "meta", name, "META:"+name, strconv.Itoa(value), "", "", passes)
+	}
+	addMetaField("request.uri.length", len(parsed.RawURI))
+	addMetaField("request.path.length", len(parsed.Path))
+	addMetaField("request.body.length", len(body))
+	addMetaField("request.query.length", rawQueryLength(parsed.RawURI))
+	addMetaField("request.header.count", len(headers))
+	addMetaField("request.header.bytes", headerBytes(headers))
+	addField(parsed, "meta", "request.content_length.present", "META:request.content_length.present", strconv.FormatBool(len(headers.Values("Content-Length")) > 0), "", "", passes)
+	addField(parsed, "meta", "request.transfer_encoding.present", "META:request.transfer_encoding.present", strconv.FormatBool(len(headers.Values("Transfer-Encoding")) > 0), "", "", passes)
+	addMetaField("request.content_length.count", len(headers.Values("Content-Length")))
+	addMetaField("request.transfer_encoding.count", len(headers.Values("Transfer-Encoding")))
+	enrichGraphQL(parsed, mediaType, body, passes)
+	enrichJWT(parsed, headers, passes)
+}
+
+func rawQueryLength(requestURI string) int {
+	if idx := strings.Index(requestURI, "?"); idx >= 0 && idx+1 < len(requestURI) {
+		return len(requestURI[idx+1:])
+	}
+	return 0
+}
+
+func headerBytes(headers http.Header) int {
+	total := 0
+	for key, values := range headers {
+		total += len(key)
+		for _, value := range values {
+			total += len(value)
+		}
+	}
+	return total
+}
+
+func enrichGraphQL(parsed *ParsedRequest, mediaType string, body []byte, passes int) {
+	query := firstGraphQLQuery(parsed, mediaType, body)
+	if strings.TrimSpace(query) == "" {
+		return
+	}
+	addField(parsed, "graphql", "query", "GRAPHQL:query", query, mediaType, "", passes)
+	addField(parsed, "graphql", "depth", "GRAPHQL:depth", strconv.Itoa(graphQLDepth(query)), "", "", passes)
+	addField(parsed, "graphql", "alias_count", "GRAPHQL:alias_count", strconv.Itoa(graphQLAliasCount(query)), "", "", passes)
+	addField(parsed, "graphql", "has_introspection", "GRAPHQL:has_introspection", strconv.FormatBool(graphQLHasIntrospection(query)), "", "", passes)
+	addField(parsed, "graphql", "has_alias_introspection", "GRAPHQL:has_alias_introspection", strconv.FormatBool(graphQLHasAliasIntrospection(query)), "", "", passes)
+}
+
+func firstGraphQLQuery(parsed *ParsedRequest, mediaType string, body []byte) string {
+	switch mediaType {
+	case "application/graphql":
+		return strings.TrimSpace(string(body))
+	case "application/json":
+		for _, field := range parsed.Fields {
+			if strings.EqualFold(field.Variable, "JSON:query") && looksLikeGraphQL(field.NormalizedValue) {
+				return field.NormalizedValue
+			}
+		}
+	}
+	for _, field := range parsed.Fields {
+		if strings.EqualFold(field.Variable, "ARGS:query") && looksLikeGraphQL(field.NormalizedValue) {
+			return field.NormalizedValue
+		}
+	}
+	return ""
+}
+
+func looksLikeGraphQL(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(lower, "__schema") || strings.Contains(lower, "__type") || strings.Contains(lower, "query") || strings.Contains(lower, "mutation") || strings.Contains(lower, "{")
+}
+
+func graphQLDepth(query string) int {
+	depth := 0
+	maxDepth := 0
+	inString := false
+	escape := false
+	for _, ch := range query {
+		if inString {
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' {
+				escape = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return maxDepth
+}
+
+func graphQLAliasCount(query string) int {
+	return len(graphqlAliasPattern.FindAllString(query, -1))
+}
+
+func graphQLHasIntrospection(query string) bool {
+	lower := strings.ToLower(query)
+	return strings.Contains(lower, "__schema") || strings.Contains(lower, "__type")
+}
+
+func graphQLHasAliasIntrospection(query string) bool {
+	matches := graphqlAliasPattern.FindAllString(strings.ToLower(query), -1)
+	for _, match := range matches {
+		if strings.Contains(match, "__schema") || strings.Contains(match, "__type") {
+			return true
+		}
+	}
+	return false
+}
+
+func enrichJWT(parsed *ParsedRequest, headers http.Header, passes int) {
+	token := bearerToken(headers.Get("Authorization"))
+	if token == "" {
+		return
+	}
+	headerClaims, payloadClaims, hasSignature, ok := parseCompactJWT(token)
+	if !ok {
+		return
+	}
+	addField(parsed, "jwt", "token", "JWT:token", token, "", "", passes)
+	addField(parsed, "jwt", "signature.present", "JWT:signature.present", strconv.FormatBool(hasSignature), "", "", passes)
+	flattenJWTClaims(parsed, "header", headerClaims, passes)
+	flattenJWTClaims(parsed, "payload", payloadClaims, passes)
+}
+
+func bearerToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(value), "bearer ") {
+		return strings.TrimSpace(value[len("bearer "):])
+	}
+	return value
+}
+
+func parseCompactJWT(token string) (map[string]any, map[string]any, bool, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return nil, nil, false, false
+	}
+	headerBytes, err := decodeJWTPart(parts[0])
+	if err != nil {
+		return nil, nil, false, false
+	}
+	payloadBytes, err := decodeJWTPart(parts[1])
+	if err != nil {
+		return nil, nil, false, false
+	}
+	headerClaims := map[string]any{}
+	payloadClaims := map[string]any{}
+	if err := json.Unmarshal(headerBytes, &headerClaims); err != nil {
+		return nil, nil, false, false
+	}
+	if err := json.Unmarshal(payloadBytes, &payloadClaims); err != nil {
+		return nil, nil, false, false
+	}
+	return headerClaims, payloadClaims, strings.TrimSpace(parts[2]) != "", true
+}
+
+func decodeJWTPart(value string) ([]byte, error) {
+	if mod := len(value) % 4; mod != 0 {
+		value += strings.Repeat("=", 4-mod)
+	}
+	return base64.URLEncoding.DecodeString(value)
+}
+
+func flattenJWTClaims(parsed *ParsedRequest, prefix string, value any, passes int) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			name := prefix + "." + key
+			flattenJWTClaims(parsed, name, child, passes)
+		}
+	case []any:
+		for i, child := range typed {
+			flattenJWTClaims(parsed, fmt.Sprintf("%s[%d]", prefix, i), child, passes)
+		}
+	case string:
+		addField(parsed, "jwt", prefix, "JWT:"+prefix, typed, "", "", passes)
+	case json.Number:
+		addField(parsed, "jwt", prefix, "JWT:"+prefix, typed.String(), "", "", passes)
+	case bool:
+		addField(parsed, "jwt", prefix, "JWT:"+prefix, strconv.FormatBool(typed), "", "", passes)
+	case nil:
+		return
+	default:
+		addField(parsed, "jwt", prefix, "JWT:"+prefix, fmt.Sprint(typed), "", "", passes)
+	}
 }

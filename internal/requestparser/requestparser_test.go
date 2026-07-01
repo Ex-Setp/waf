@@ -5,6 +5,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -172,6 +173,42 @@ func TestParseBodyTooLargeModes(t *testing.T) {
 	}
 }
 
+func TestParseAddsT154ProtocolAndAPIMetadata(t *testing.T) {
+	body := []byte(`{"query":"{viewer:__schema{types{name}}}","role":"admin"}`)
+	headers := http.Header{
+		"Content-Type":       []string{"application/json"},
+		"Transfer-Encoding":  []string{"chunked", "identity"},
+		"Content-Length":     []string{"58", "58"},
+		"Authorization":      []string{"Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIiwicm9sZSI6ImFkbWluIn0."},
+		"X-Custom-Duplicate": []string{"one", "two"},
+	}
+	parsed := Parse("POST", "/graphql", headers, body, Options{})
+
+	assertFieldValue(t, parsed.Fields, "GRAPHQL:has_introspection", "true")
+	assertFieldValue(t, parsed.Fields, "GRAPHQL:has_alias_introspection", "true")
+	assertFieldValue(t, parsed.Fields, "JWT:header.alg", "none")
+	assertFieldValue(t, parsed.Fields, "JWT:signature.present", "false")
+	assertFieldValue(t, parsed.Fields, "JSON:role", "admin")
+	assertFieldValue(t, parsed.Fields, "META:request.content_length.count", "2")
+	assertFieldValue(t, parsed.Fields, "META:request.transfer_encoding.count", "2")
+	assertFieldValue(t, parsed.Fields, "REQUEST_METHOD", "POST")
+
+	args := map[string][]string{}
+	MergeFieldsIntoArgs(args, parsed)
+	if got := firstArg(args, "json.role"); got != "admin" {
+		t.Fatalf("json.role=%q, want admin", got)
+	}
+	if got := firstArg(args, "graphql.has_introspection"); got != "true" {
+		t.Fatalf("graphql.has_introspection=%q, want true", got)
+	}
+	if got := firstArg(args, "jwt.header.alg"); got != "none" {
+		t.Fatalf("jwt.header.alg=%q, want none", got)
+	}
+	if got := firstArg(args, "request.content_length.count"); got != "2" {
+		t.Fatalf("MergeFieldsIntoArgs should preserve parser behavior before server filtering, got %q want 2", got)
+	}
+}
+
 func findField(fields []ParsedField, source, variable string) *ParsedField {
 	for i := range fields {
 		if fields[i].Source == source && fields[i].Variable == variable {
@@ -188,4 +225,61 @@ func hasFieldValue(fields []ParsedField, variable, want string) bool {
 		}
 	}
 	return false
+}
+
+func assertFieldValue(t *testing.T, fields []ParsedField, variable, want string) {
+	t.Helper()
+	for _, field := range fields {
+		if field.Variable == variable && field.NormalizedValue == want {
+			return
+		}
+	}
+	t.Fatalf("missing %s=%q in fields: %#v", variable, want, fields)
+}
+
+func firstArg(args map[string][]string, key string) string {
+	if len(args[key]) == 0 {
+		return ""
+	}
+	return args[key][0]
+}
+
+func TestGraphQLDepthCalculation(t *testing.T) {
+	query := "{a{b{c{d{e{f{g{h{i{j{k{l{m}}}}}}}}}}}}"
+	if got := graphQLDepth(query); got != 13 {
+		t.Fatalf("graphQLDepth=%d, want 13", got)
+	}
+	if got := graphQLAliasCount("{viewer:__schema{types{name}} other:user{id}}"); got < 2 {
+		t.Fatalf("graphQLAliasCount=%d, want >=2", got)
+	}
+	if !graphQLHasAliasIntrospection("{viewer:__schema{types{name}}}") {
+		t.Fatalf("expected alias introspection to be detected")
+	}
+	if !graphQLHasIntrospection("{__type(name:\"User\"){name}}") {
+		t.Fatalf("expected introspection to be detected")
+	}
+}
+
+func TestParseCompactJWTNoneAlgorithm(t *testing.T) {
+	header := "eyJhbGciOiJub25lIn0"
+	payload := "eyJzdWIiOiIxIiwicm9sZSI6ImFkbWluIn0"
+	claims, payloadClaims, hasSignature, ok := parseCompactJWT(header + "." + payload + ".")
+	if !ok {
+		t.Fatalf("expected compact JWT to parse")
+	}
+	if claims["alg"] != "none" {
+		t.Fatalf("header alg=%v, want none", claims["alg"])
+	}
+	if payloadClaims["role"] != "admin" {
+		t.Fatalf("payload role=%v, want admin", payloadClaims["role"])
+	}
+	if hasSignature {
+		t.Fatalf("hasSignature=true, want false")
+	}
+	if decoded, err := decodeJWTPart(header); err != nil || !strings.Contains(string(decoded), `"alg":"none"`) {
+		t.Fatalf("decodeJWTPart=%q err=%v", decoded, err)
+	}
+	if got := strconv.FormatBool(ok); got != "true" {
+		t.Fatalf("ok=%s, want true", got)
+	}
 }

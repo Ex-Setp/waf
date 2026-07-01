@@ -825,42 +825,9 @@ func (s *Server) toPipelineRequest(r *http.Request) (pipeline.Request, error) {
 	parsed := requestparser.Parse(r.Method, requestURI(r), r.Header.Clone(), body, requestparser.Options{MaxBodySize: s.security.MaxBodySize, FailOpen: s.security.FailOpen})
 	args := cloneValues(r.URL.Query())
 	mergeBodyArgs(args, r.Header.Get("Content-Type"), body)
-	mergeParsedArgs(args, parsed)
+	requestparser.MergeFieldsIntoArgs(args, parsed)
+	removeSyntheticParserArgs(args, parsed)
 	return pipeline.Request{ID: fmt.Sprintf("req-%d", time.Now().UnixNano()), Method: r.Method, Path: requestURI(r), Host: r.Host, RemoteIP: remoteIP(r.RemoteAddr), Headers: r.Header.Clone(), Args: args, Body: string(body), Timestamp: time.Now(), ParsedRequest: parsed}, nil
-}
-
-func mergeParsedArgs(args map[string][]string, parsed requestparser.ParsedRequest) {
-	seen := map[string]map[string]bool{}
-	for key, values := range args {
-		seen[key] = map[string]bool{}
-		for _, value := range values {
-			seen[key][value] = true
-		}
-	}
-	addUnique := func(key, value string) {
-		if strings.TrimSpace(key) == "" || value == "" {
-			return
-		}
-		if seen[key] == nil {
-			seen[key] = map[string]bool{}
-		}
-		if seen[key][value] {
-			return
-		}
-		seen[key][value] = true
-		addArg(args, key, value)
-	}
-	for _, field := range parsed.Fields {
-		switch field.Source {
-		case "query", "form", "multipart":
-			addUnique(field.Name, field.NormalizedValue)
-		case "json":
-			addUnique("json."+field.Name, field.NormalizedValue)
-		}
-		if strings.HasPrefix(field.Variable, "FILES:") {
-			addUnique(strings.TrimPrefix(field.Variable, "FILES:"), field.NormalizedValue)
-		}
-	}
 }
 
 func cloneValues(values map[string][]string) map[string][]string {
@@ -872,6 +839,18 @@ func cloneValues(values map[string][]string) map[string][]string {
 		out[key] = append([]string(nil), items...)
 	}
 	return out
+}
+
+func removeSyntheticParserArgs(args map[string][]string, parsed requestparser.ParsedRequest) {
+	if len(args) == 0 || len(parsed.Fields) == 0 {
+		return
+	}
+	for _, field := range parsed.Fields {
+		switch field.Source {
+		case "request", "meta":
+			delete(args, field.Name)
+		}
+	}
 }
 
 func mergeBodyArgs(args map[string][]string, contentType string, body []byte) {

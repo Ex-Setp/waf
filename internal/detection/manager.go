@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"aegis-waf/internal/requestparser"
 )
 
 type Manager struct {
@@ -75,8 +77,7 @@ func (m *Manager) Inspect(_ context.Context, req Request) (Result, error) {
 		if !ruleGroupEnabled(rule.Group, req.EnabledRuleGroups) {
 			continue
 		}
-		if rule.matches(req) {
-			matched := MatchedRule{ID: rule.ID, Message: rule.Message, Source: rule.Source, Group: rule.Group, Action: rule.Action, Severity: rule.Severity, Score: rule.Score}
+		if matched, ok := rule.match(req); ok {
 			result.Matches = append(result.Matches, matched)
 			result.Score += rule.Score
 			result.Severity = maxSeverity(result.Severity, rule.Severity)
@@ -434,31 +435,48 @@ func parseOperator(expr string) (string, string) {
 	return fields[0], strings.Join(fields[1:], " ")
 }
 
-func (r Rule) matches(req Request) bool {
-	target := strings.ToLower(buildTarget(r.Variable, req))
-	pattern := strings.ToLower(r.Pattern)
+func (r Rule) match(req Request) (MatchedRule, bool) {
+	target, evidence := buildTarget(r.Variable, req)
+	pattern := r.Pattern
 	if target == "" && strings.TrimSpace(r.Variable) == "REQUEST_HEADERS:User-Agent" && r.Action == RuleActionDeny {
-		return false
+		return MatchedRule{}, false
 	}
+	if strings.EqualFold(strings.TrimSpace(r.Variable), "REQUEST_HEADERS_NAMES") && r.Operator == "@rx" {
+		matchedHeaders, headerEvidence := matchHeaderNameRegex(req.Headers, pattern)
+		if !matchedHeaders {
+			return MatchedRule{}, false
+		}
+		return MatchedRule{ID: r.ID, Message: r.Message, Source: r.Source, Group: r.Group, Action: r.Action, Severity: r.Severity, Score: r.Score, Evidence: uniqueEvidence(headerEvidence)}, true
+	}
+	matched := false
 	if strings.EqualFold(pattern, "^$") {
 		if r.Action == RuleActionLog {
-			return target == ""
+			matched = target == ""
+		} else {
+			matched = strings.TrimSpace(r.Variable) != "REQUEST_HEADERS:User-Agent" && target == ""
 		}
-		return strings.TrimSpace(r.Variable) != "REQUEST_HEADERS:User-Agent" && target == ""
-	}
-	switch r.Operator {
-	case "@contains":
-		return strings.Contains(target, pattern)
-	case "@streq":
-		return target == pattern
-	case "@rx":
-		if strings.EqualFold(pattern, "^$") {
-			return target == ""
+	} else {
+		switch r.Operator {
+		case "@contains":
+			matched = strings.Contains(strings.ToLower(target), strings.ToLower(pattern))
+		case "@streq":
+			matched = strings.EqualFold(target, pattern)
+		case "@rx":
+			if strings.EqualFold(pattern, "^$") {
+				matched = target == ""
+			} else {
+				matched = regexMatches(pattern, target)
+			}
+		case "@gt", "@ge", "@lt", "@le", "@eq":
+			matched = compareNumeric(r.Operator, target, pattern)
+		default:
+			matched = false
 		}
-		return regexMatches(pattern, target)
-	default:
-		return false
 	}
+	if !matched {
+		return MatchedRule{}, false
+	}
+	return MatchedRule{ID: r.ID, Message: r.Message, Source: r.Source, Group: r.Group, Action: r.Action, Severity: r.Severity, Score: r.Score, Evidence: uniqueEvidence(evidence)}, true
 }
 
 func regexMatches(pattern, target string) bool {
@@ -478,42 +496,89 @@ func regexMatches(pattern, target string) bool {
 	return strings.Contains(target, literal)
 }
 
-func buildTarget(variable string, req Request) string {
+func matchHeaderNameRegex(headers http.Header, pattern string) (bool, []string) {
+	if len(headers) == 0 {
+		return false, nil
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	evidence := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if regexMatches(pattern, key) {
+			evidence = append(evidence, fmt.Sprintf("REQUEST_HEADERS_NAMES=%s", key))
+		}
+	}
+	return len(evidence) > 0, evidence
+}
+
+func buildTarget(variable string, req Request) (string, []string) {
 	parts := strings.Split(variable, "|")
 	if len(parts) > 1 {
 		values := make([]string, 0, len(parts))
+		evidence := make([]string, 0, len(parts))
 		for _, part := range parts {
-			values = append(values, buildSingleTarget(part, req))
+			value, partEvidence := buildSingleTarget(part, req)
+			if strings.TrimSpace(value) != "" {
+				values = append(values, value)
+			}
+			evidence = append(evidence, partEvidence...)
 		}
-		return strings.Join(values, " ")
+		return strings.Join(values, " "), evidence
 	}
 	return buildSingleTarget(variable, req)
 }
 
-func buildSingleTarget(variable string, req Request) string {
+func buildSingleTarget(variable string, req Request) (string, []string) {
+	variable = strings.TrimSpace(variable)
 	upper := strings.ToUpper(strings.TrimSpace(variable))
 	if name, ok := strings.CutPrefix(upper, "REQUEST_HEADERS:"); ok {
-		return req.Headers.Get(httpHeaderName(name))
+		key := httpHeaderName(name)
+		values := req.Headers.Values(key)
+		if len(values) == 0 {
+			return "", nil
+		}
+		return strings.Join(values, ","), []string{fmt.Sprintf("%s=%s", "REQUEST_HEADERS:"+key, strings.Join(values, ","))}
+	}
+	if name, ok := strings.CutPrefix(variable, "JSON:"); ok {
+		return parsedFieldValues(req.ParsedRequest, "JSON:"+name)
+	}
+	if name, ok := strings.CutPrefix(variable, "GRAPHQL:"); ok {
+		return parsedFieldValues(req.ParsedRequest, "GRAPHQL:"+name)
+	}
+	if name, ok := strings.CutPrefix(variable, "JWT:"); ok {
+		return parsedFieldValues(req.ParsedRequest, "JWT:"+name)
+	}
+	if name, ok := strings.CutPrefix(variable, "META:"); ok {
+		return parsedFieldValues(req.ParsedRequest, "META:"+name)
+	}
+	if upper == "REQUEST_PATH" {
+		return req.ParsedRequest.Path, []string{fmt.Sprintf("REQUEST_PATH=%s", req.ParsedRequest.Path)}
 	}
 	if upper == "REQUEST_HEADERS_NAMES" {
-		return flattenHeaderNames(req.Headers)
+		return flattenHeaderNames(req.Headers), nil
+	}
+	if name, ok := strings.CutPrefix(variable, "ARGS:"); ok {
+		return argValues(mergedArgs(req), name)
 	}
 	base := strings.SplitN(upper, ":", 2)[0]
 	switch base {
 	case "ARGS":
-		return flattenArgs(mergedArgs(req))
+		return flattenArgs(mergedArgs(req)), nil
 	case "ARGS_NAMES":
-		return flattenArgNames(mergedArgs(req))
+		return flattenArgNames(mergedArgs(req)), nil
 	case "REQUEST_URI", "REQUEST_LINE":
-		return req.URI + " " + decodeRepeated(req.URI)
+		return req.URI + " " + decodeRepeated(req.URI), []string{fmt.Sprintf("REQUEST_URI=%s", req.URI)}
 	case "REQUEST_HEADERS":
-		return flattenHeaders(req.Headers)
+		return flattenHeaders(req.Headers), nil
 	case "REQUEST_METHOD":
-		return req.Method
+		return req.Method, []string{fmt.Sprintf("REQUEST_METHOD=%s", req.Method)}
 	case "REQUEST_BODY":
-		return req.Body
+		return req.Body, []string{fmt.Sprintf("REQUEST_BODY=%s", truncateEvidence(req.Body))}
 	default:
-		return req.Body + " " + req.URI + " " + decodeRepeated(req.URI) + " " + flattenArgs(req.Args) + " " + req.Headers.Get("User-Agent") + " " + req.Headers.Get("Content-Type")
+		return req.Body + " " + req.URI + " " + decodeRepeated(req.URI) + " " + flattenArgs(req.Args) + " " + req.Headers.Get("User-Agent") + " " + req.Headers.Get("Content-Type"), nil
 	}
 }
 
@@ -622,7 +687,7 @@ func flattenHeaderNames(headers http.Header) string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	return strings.Join(keys, "")
+	return strings.Join(keys, " ")
 }
 
 func flattenArgs(args map[string][]string) string {
@@ -630,7 +695,13 @@ func flattenArgs(args map[string][]string) string {
 		return ""
 	}
 	var builder strings.Builder
-	for key, values := range args {
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		values := args[key]
 		builder.WriteString(key)
 		builder.WriteString("=")
 		builder.WriteString(strings.Join(values, ","))
@@ -648,7 +719,85 @@ func flattenArgNames(args map[string][]string) string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	return strings.Join(keys, "")
+	return strings.Join(keys, " ")
+}
+
+func parsedFieldValues(parsed requestparser.ParsedRequest, variable string) (string, []string) {
+	values := make([]string, 0, 2)
+	evidence := make([]string, 0, 2)
+	for _, field := range parsed.Fields {
+		if field.Variable != variable {
+			continue
+		}
+		values = append(values, field.NormalizedValue)
+		evidence = append(evidence, fmt.Sprintf("%s=%s", variable, truncateEvidence(field.NormalizedValue)))
+	}
+	return strings.Join(values, ","), evidence
+}
+
+func argValues(args map[string][]string, name string) (string, []string) {
+	values, ok := args[name]
+	if !ok || len(values) == 0 {
+		return "", nil
+	}
+	evidence := make([]string, 0, len(values))
+	for _, value := range values {
+		evidence = append(evidence, fmt.Sprintf("ARGS:%s=%s", name, truncateEvidence(value)))
+	}
+	return strings.Join(values, ","), evidence
+}
+
+func compareNumeric(operator, target, pattern string) bool {
+	left, err := strconv.ParseFloat(strings.TrimSpace(target), 64)
+	if err != nil {
+		return false
+	}
+	right, err := strconv.ParseFloat(strings.TrimSpace(pattern), 64)
+	if err != nil {
+		return false
+	}
+	switch operator {
+	case "@gt":
+		return left > right
+	case "@ge":
+		return left >= right
+	case "@lt":
+		return left < right
+	case "@le":
+		return left <= right
+	case "@eq":
+		return left == right
+	default:
+		return false
+	}
+}
+
+func truncateEvidence(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 160 {
+		return value
+	}
+	return value[:160]
+}
+
+func uniqueEvidence(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func normalizePaths(paths []string) []string {
@@ -689,8 +838,14 @@ func normalizeRuleGroup(value string) string {
 func inferRuleGroup(source string) string {
 	name := strings.ToLower(filepath.Base(source))
 	switch {
+	case strings.Contains(name, "xxe") || strings.Contains(name, "906"):
+		return "xxe"
 	case strings.Contains(name, "upload") || strings.Contains(name, "907"):
 		return "upload"
+	case strings.Contains(name, "protocol") || strings.Contains(name, "909"):
+		return "protocol"
+	case strings.Contains(name, "api") || strings.Contains(name, "graphql") || strings.Contains(name, "jwt") || strings.Contains(name, "json") || strings.Contains(name, "910"):
+		return "api"
 	case strings.Contains(name, "sqli") || strings.Contains(name, "942"):
 		return "sqli"
 	case strings.Contains(name, "xss") || strings.Contains(name, "941"):

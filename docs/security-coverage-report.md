@@ -4,25 +4,25 @@
 - Rules directory: `D:/aa/waf/waf/rules`
 - Corpus directory: `D:/aa/waf/waf/testdata/security-corpus`
 - Rule files: 12
-- SecRule count: 570
+- SecRule count: 572
 - Rule version: `custom`
 
 ## Gate Summary
 
 | Metric | Result | Gate | Status |
 | --- | ---: | ---: | --- |
-| Attack block rate | 90.41% (66/73) | >= 90.00% | PASS |
+| Attack block rate | 95.89% (70/73) | >= 90.00% | PASS |
 | Benign false positives | 0/67 (0.00%) | <= 3 samples | PASS |
 
 ## Category Coverage
 
 | Category | Attack Blocked | Attack Rate | Benign False Positives |
 | --- | ---: | ---: | ---: |
-| api | 3/8 | 37.50% | 0/20 |
+| api | 6/8 | 75.00% | 0/20 |
 | bot | 9/9 | 100.00% | 0/5 |
 | protocol | 7/7 | 100.00% | 0/6 |
 | rce | 8/9 | 88.89% | 0/1 |
-| scanner | 11/12 | 91.67% | 0/8 |
+| scanner | 12/12 | 100.00% | 0/8 |
 | sqli | 10/10 | 100.00% | 0/4 |
 | ssrf | 3/3 | 100.00% | 0/3 |
 | traversal | 3/3 | 100.00% | 0/5 |
@@ -32,13 +32,9 @@
 
 ## Missed Attack Samples
 
-- `api-graphql-depth-attack` (api): decision=observe score=2 rules=[908080 910062]
-- `api-graphql-introspection` (api): decision=observe score=2 rules=[908080 910062]
-- `api-idor-user-id` (api): decision=observe score=1 rules=[908023]
-- `api-json-prototype-pollution` (api): decision=observe score=2 rules=[908023 910062]
-- `api-jwt-role-tamper` (api): decision=observe score=2 rules=[908023 910062]
-- `cve-spring-actuator` (scanner): decision=observe score=1 rules=[908020]
-- `rce-ognl-struts2` (rce): decision=allow score=3 rules=[909073]
+- `api-idor-user-id` (api): decision=allow score=0 rules=[]
+- `api-jwt-none-body` (api): decision=allow score=1 rules=[910062]
+- `rce-ognl-struts2` (rce): decision=allow score=0 rules=[]
 
 ## False Positive Samples
 

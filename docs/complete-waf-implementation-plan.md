@@ -2816,7 +2816,7 @@ cd web && npm run build
 
 **下一任务：** T154：协议异常、请求走私与 API 安全增强。
 
-#### T154：协议异常、请求走私与 API 安全增强
+#### T154：协议异常、请求走私与 API 安全增强（已完成）
 
 **目标：** 覆盖 HTTP 协议异常、请求走私特征、JSON/XML/GraphQL/JWT 常见攻击面。
 
@@ -2836,9 +2836,37 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] XXE、GraphQL introspection abuse、JWT none alg 样本能识别。
-- [ ] 正常 JSON/API 请求不误拦。
-- [ ] 协议异常日志给出明确字段和原因。
+- [x] XXE、GraphQL introspection abuse、JWT none alg 样本能识别。
+- [x] 正常 JSON/API 请求不误拦。
+- [x] 协议异常日志给出明确字段和原因。
+
+**完成记录（2026-07-01）：**
+
+- `internal/requestparser/requestparser.go` 扩展协议/API 解析字段：JSON 嵌套路径、GraphQL depth/introspection/alias-introspection、JWT header alg/signature、请求长度与 header/content-length/transfer-encoding metadata，并通过 `MergeFieldsIntoArgs` 注入检测变量。
+- `internal/detection/manager.go` 增强本地规则匹配：支持 `JSON:`、`GRAPHQL:`、`JWT:`、`META:`、`ARGS:` 精确变量与 `@gt/@ge/@lt/@le/@eq` 数值比较；多变量 evidence 合并；header/args flatten 更稳定；规则分组补齐 xxe/protocol/api。
+- `internal/detection/coraza_engine.go` 对 Coraza 不支持的协议/API 变量执行 local Manager supplement，允许 T154 local-only deny 规则进入最终结果，并把本地 evidence 合并回 Coraza match，覆盖 909002、909048、910001、910008、910021、910030、910034 等关键规则。
+- `internal/auditlog/writer.go` 的 attack explanation JSON 输出关闭 HTML escaping，XXE payload 中 `<DOCTYPE ...>` 等 evidence 在日志中保持可读；`internal/httpserver/server.go`、`internal/pipeline/pipeline.go`、`internal/securityeval/securityeval.go` 接入解析变量与派生字段。
+- `rules/REQUEST-909-PROTOCOL-ANOMALY.conf`、`REQUEST-910-API-JSON-GRAPHQL-JWT.conf`、`REQUEST-906-XXE.conf` 等规则包收敛为字段级检测：GraphQL introspection/depth、JSON prototype pollution、JWT none alg、JSON role tamper、Content-Length/Transfer-Encoding 混淆、XXE；同时收窄 XPath path 规则避免 `/static/app.css` 静态资源误拦。
+- 新增 `internal/httpserver/t154_protocol_api_test.go` 与 requestparser/detection 回归测试，覆盖 GraphQL introspection/depth、JWT none、JSON role tamper/prototype pollution、XXE evidence、协议异常字段证据和正常 API/静态资源不误拦。
+- `docs/security-coverage-report.md` 已刷新：规则文件 12 个、SecRule 572 条、攻击阻断率 95.89%（70/73）、良性误报 0/67，protocol 分类 7/7、xxe 2/2、api 6/8。
+
+**验证命令：**
+
+- `gofmt -w internal/auditlog/writer.go internal/detection/coraza_engine.go internal/detection/manager.go internal/detection/manager_test.go internal/detection/types.go internal/httpserver/server.go internal/pipeline/pipeline.go internal/requestparser/requestparser.go internal/requestparser/requestparser_test.go internal/securityeval/securityeval.go internal/httpserver/t154_protocol_api_test.go` 通过。
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/httpserver -run TestT154ProtocolAPISecurityClosure -count=1` 通过。
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/securityeval -run TestT149SecurityCoverage -count=1` 通过。
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/detection ./internal/requestparser ./internal/pipeline ./internal/httpserver -count=1` 通过。
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./... -count=1` 通过。
+- `cd web && npm run build` 通过（仅既有 Rollup pure annotation 与 chunk-size 警告、chunk size 警告）。
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go run ./cmd/aegis-securityeval -out docs/security-coverage-report.md` 通过。
+- `git diff --check` 通过（仅 Windows CRLF 提示）。
+
+**边界说明 / 与后续任务融合：**
+
+- T154 完成协议/API 字段级检测、日志 evidence 与 securityeval 覆盖率提升；剩余 `api-idor-user-id`、`api-jwt-none-body`、`rce-ognl-struts2` 漏拦样本继续交给 T155/T156 的持续规则/情报更新与覆盖率门禁处理。
+- T155 复用本次字段级变量、local supplement 和刷新后的覆盖率报告，继续实现规则/情报包获取、校验、评测、发布、回滚和前端可见状态。
+
+**下一任务：** T155：威胁情报与规则更新流水线。
 
 #### T155：威胁情报与规则更新流水线
 

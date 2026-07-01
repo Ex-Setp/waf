@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"aegis-waf/internal/requestparser"
 )
 
 func TestManagerLoadsRulesAndBlocksMatchingRequest(t *testing.T) {
@@ -163,6 +165,102 @@ func TestWatcherReloadsOnRuleWrite(t *testing.T) {
 	}
 }
 
+func TestManagerMatchesParsedVariablesAndCapturesEvidence(t *testing.T) {
+	dir := t.TempDir()
+	writeRule(t, filepath.Join(dir, "local.conf"), `
+SecRule JSON:role "@streq admin" "id:910034,phase:2,deny,severity:'critical',score:10,msg:'role tamper'"
+SecRule GRAPHQL:depth "@gt 12" "id:910008,phase:2,deny,severity:'critical',score:10,msg:'graphql depth'"
+SecRule JWT:header.alg "@streq none" "id:910030,phase:1,deny,severity:'high',score:7,msg:'jwt none'"
+SecRule META:request.content_length.count "@gt 1" "id:909048,phase:1,deny,severity:'critical',score:10,msg:'duplicate content-length'"
+`)
+
+	manager, err := NewManager(dir, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	parsed := requestparser.Parse("POST", "/graphql", map[string][]string{
+		"Content-Type":      {"application/json"},
+		"Content-Length":    {"52", "52"},
+		"Authorization":     {"Bearer eyJhbGciOiJub25lIn0.eyJyb2xlIjoiYWRtaW4ifQ."},
+		"Transfer-Encoding": {"chunked"},
+	}, []byte(`{"query":"{a{b{c{d{e{f{g{h{i{j{k{l{m}}}}}}}}}}}}","role":"admin"}`), requestparser.Options{})
+	req := Request{
+		Method:        "POST",
+		URI:           "/graphql",
+		Headers:       map[string][]string{"Content-Type": {"application/json"}, "Content-Length": {"52", "52"}, "Authorization": {"Bearer eyJhbGciOiJub25lIn0.eyJyb2xlIjoiYWRtaW4ifQ."}},
+		Body:          `{"query":"{a{b{c{d{e{f{g{h{i{j{k{l{m}}}}}}}}}}}}","role":"admin"}`,
+		ParsedRequest: parsed,
+	}
+	result, err := manager.Inspect(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if result.Decision != DecisionBlock {
+		t.Fatalf("expected block decision, got %+v", result)
+	}
+	if len(result.Matches) < 4 {
+		t.Fatalf("expected 4 matches, got %+v", result.Matches)
+	}
+	assertEvidenceContains(t, result.Matches, 910034, "JSON:role=admin")
+	assertEvidenceContains(t, result.Matches, 910008, "GRAPHQL:depth=13")
+	assertEvidenceContains(t, result.Matches, 910030, "JWT:header.alg=none")
+	assertEvidenceContains(t, result.Matches, 909048, "META:request.content_length.count=2")
+}
+
+func TestManagerRegexDoesNotLowercaseRequestMethod(t *testing.T) {
+	dir := t.TempDir()
+	writeRule(t, filepath.Join(dir, "protocol.conf"), `SecRule REQUEST_METHOD "@rx ^(get|post|put|delete|patch)$" "id:909024,phase:1,log,severity:'info',msg:'case-obfuscated method'"`)
+
+	manager, err := NewManager(dir, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	allowed, err := manager.Inspect(context.Background(), Request{Method: "GET"})
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if len(allowed.Matches) != 0 {
+		t.Fatalf("uppercase GET should not match lowercase-only regex, got %+v", allowed.Matches)
+	}
+
+	matched, err := manager.Inspect(context.Background(), Request{Method: "get"})
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if len(matched.Matches) != 1 || matched.Matches[0].ID != 909024 {
+		t.Fatalf("lowercase get should match, got %+v", matched.Matches)
+	}
+}
+
+func TestManagerMatchesHeaderNameRegexPerHeader(t *testing.T) {
+	dir := t.TempDir()
+	writeRule(t, filepath.Join(dir, "protocol.conf"), `SecRule REQUEST_HEADERS_NAMES "@rx [^a-zA-Z0-9\-_]" "id:909043,phase:1,deny,severity:'warning',msg:'invalid header name'"`)
+
+	manager, err := NewManager(dir, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	allowed, err := manager.Inspect(context.Background(), Request{Headers: map[string][]string{"User-Agent": {"Mozilla/5.0"}, "Content-Type": {"application/json"}}})
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if len(allowed.Matches) != 0 {
+		t.Fatalf("valid canonical headers should not match, got %+v", allowed.Matches)
+	}
+
+	blocked, err := manager.Inspect(context.Background(), Request{Headers: map[string][]string{"Bad:Name": {"x"}}})
+	if err != nil {
+		t.Fatalf("Inspect returned error: %v", err)
+	}
+	if len(blocked.Matches) != 1 || blocked.Matches[0].ID != 909043 {
+		t.Fatalf("invalid header name should match, got %+v", blocked.Matches)
+	}
+	assertEvidenceContains(t, blocked.Matches, 909043, "REQUEST_HEADERS_NAMES=Bad:Name")
+}
+
 func writeRule(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -171,4 +269,20 @@ func writeRule(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write rule file: %v", err)
 	}
+}
+
+func assertEvidenceContains(t *testing.T, matches []MatchedRule, id int, want string) {
+	t.Helper()
+	for _, match := range matches {
+		if match.ID != id {
+			continue
+		}
+		for _, evidence := range match.Evidence {
+			if evidence == want {
+				return
+			}
+		}
+		t.Fatalf("match %d evidence=%v, want %q", id, match.Evidence, want)
+	}
+	t.Fatalf("match %d not found in %+v", id, matches)
 }

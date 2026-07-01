@@ -1,9 +1,11 @@
 package auditlog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -210,6 +212,9 @@ func AttackLogFrom(site *gateway.SiteRuntime, req pipeline.Request, result pipel
 	if entry.RuleID == "" {
 		entry.RuleID = entry.Stage
 	}
+	if evidence := firstSafeEvidence(result); evidence != "" && !strings.Contains(entry.RuleMessage, evidence) {
+		entry.RuleMessage = strings.TrimSpace(entry.RuleMessage + " | " + evidence)
+	}
 	return entry
 }
 
@@ -264,13 +269,13 @@ func explanationJSON(site *gateway.SiteRuntime, req pipeline.Request, result pip
 		exp.SitePolicy = sitePolicyInfo{SiteID: site.ID, SiteName: site.Name, PolicyMode: site.PolicyMode, BlockScoreThreshold: site.BlockScoreThreshold, RuntimeVersion: site.RuntimeVersion, RuleGroups: site.RuleGroups}
 	}
 	for _, match := range result.Detection.Matches {
-		exp.MatchedRules = append(exp.MatchedRules, matchedRuleInfo{ID: match.ID, Source: match.Source, Group: match.Group, Severity: match.Severity, Score: match.Score, Action: string(match.Action), Message: match.Message, Evidence: match.Evidence})
+		exp.MatchedRules = append(exp.MatchedRules, matchedRuleInfo{ID: match.ID, Source: match.Source, Group: match.Group, Severity: match.Severity, Score: match.Score, Action: string(match.Action), Message: sanitizeMatchMessage(match.Message), Evidence: sanitizeEvidenceList(match.Evidence)})
 		if strings.HasPrefix(match.Source, "cc:") || strings.EqualFold(match.Group, "cc") || strings.Contains(strings.ToLower(match.Message), "policy=") {
 			exp.CCBotDecision = decisionInfo{Status: finalAction, Reason: match.Message}
 		}
 	}
 	for _, match := range result.Semantic.Matches {
-		exp.MatchedRules = append(exp.MatchedRules, matchedRuleInfo{ID: match.ID, Source: match.Source, Group: defaultString(match.Group, "semantic"), Severity: match.Severity, Score: match.Score, Action: string(match.Action), Message: match.Message, Evidence: match.Evidence})
+		exp.MatchedRules = append(exp.MatchedRules, matchedRuleInfo{ID: match.ID, Source: match.Source, Group: defaultString(match.Group, "semantic"), Severity: match.Severity, Score: match.Score, Action: string(match.Action), Message: sanitizeMatchMessage(match.Message), Evidence: sanitizeEvidenceList(match.Evidence)})
 		exp.SemanticDecision = decisionInfo{Status: finalAction, Reason: match.Message}
 	}
 	if strings.EqualFold(result.BlockedByStage, "accesscontrol") {
@@ -289,6 +294,9 @@ func explanationJSON(site *gateway.SiteRuntime, req pipeline.Request, result pip
 		if isSensitiveVariable(field.Variable) {
 			rawValue = "[REDACTED]"
 			normalizedValue = "[REDACTED]"
+		} else {
+			rawValue = sanitizeVariableValue(field.Variable, rawValue)
+			normalizedValue = sanitizeVariableValue(field.Variable, normalizedValue)
 		}
 		exp.RequestVariables = append(exp.RequestVariables, requestVariableInfo{Variable: field.Variable, Source: field.Source, RawValue: rawValue, NormalizedValue: normalizedValue, DecodeSteps: steps})
 		if len(steps) > 0 {
@@ -298,7 +306,7 @@ func explanationJSON(site *gateway.SiteRuntime, req pipeline.Request, result pip
 			break
 		}
 	}
-	data, err := json.Marshal(exp)
+	data, err := marshalJSONNoEscape(exp)
 	if err != nil {
 		return ""
 	}
@@ -334,7 +342,7 @@ func operatorSuggestionsJSON(site *gateway.SiteRuntime, req pipeline.Request, re
 		match := primarySemanticMatch(result)
 		suggestions = append(suggestions, suggestion{Type: "semantic", Title: "复核语义指纹", Target: match.Group, Reason: "语义命中可观察、回滚或升级规则", Action: "open_semantic_fingerprint"})
 	}
-	data, err := json.Marshal(suggestions)
+	data, err := marshalJSONNoEscape(suggestions)
 	if err != nil {
 		return "[]"
 	}
@@ -351,6 +359,102 @@ func isSensitiveVariable(variable string) bool {
 		}
 	}
 	return false
+}
+
+func sanitizeEvidenceList(evidence []string) []string {
+	if len(evidence) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(evidence))
+	for _, item := range evidence {
+		out = append(out, sanitizeEvidence(item))
+	}
+	return out
+}
+
+func sanitizeEvidence(value string) string {
+	name, rawValue, ok := strings.Cut(value, "=")
+	if !ok {
+		return sanitizeMatchMessage(value)
+	}
+	if isSensitiveVariable(name) {
+		return name + "=[REDACTED]"
+	}
+	return name + "=" + sanitizeVariableValue(name, rawValue)
+}
+
+func sanitizeMatchMessage(value string) string {
+	return redactSensitiveQueryParams(value)
+}
+
+func sanitizeVariableValue(variable, value string) string {
+	if isSensitiveVariable(variable) {
+		return "[REDACTED]"
+	}
+	if isURIVariable(variable) {
+		return redactSensitiveQueryParams(value)
+	}
+	return value
+}
+
+func isURIVariable(variable string) bool {
+	switch strings.ToUpper(strings.TrimSpace(variable)) {
+	case "REQUEST_URI", "REQUEST_LINE", "REQUEST_PATH":
+		return true
+	default:
+		return false
+	}
+}
+
+func redactSensitiveQueryParams(value string) string {
+	if value == "" {
+		return value
+	}
+	qmark := strings.IndexByte(value, '?')
+	if qmark < 0 || qmark == len(value)-1 {
+		return value
+	}
+	fragment := ""
+	queryEnd := len(value)
+	if hash := strings.IndexByte(value[qmark+1:], '#'); hash >= 0 {
+		queryEnd = qmark + 1 + hash
+		fragment = value[queryEnd:]
+	}
+	query := value[qmark+1 : queryEnd]
+	if query == "" {
+		return value
+	}
+	parts := strings.Split(query, "&")
+	changed := false
+	for i, part := range parts {
+		key, rawVal, hasEq := strings.Cut(part, "=")
+		if !hasEq {
+			continue
+		}
+		decodedKey, err := url.QueryUnescape(key)
+		if err != nil {
+			decodedKey = key
+		}
+		if !isSensitiveField(decodedKey) {
+			continue
+		}
+		parts[i] = key + "=[REDACTED]"
+		changed = true
+		_ = rawVal
+	}
+	if !changed {
+		return value
+	}
+	return value[:qmark+1] + strings.Join(parts, "&") + fragment
+}
+
+func isSensitiveField(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "password", "passwd", "pwd", "secret", "token", "access_token", "refresh_token", "authorization", "api_key", "apikey", "key":
+		return true
+	default:
+		return false
+	}
 }
 
 func siteName(site *gateway.SiteRuntime) string {
@@ -377,7 +481,7 @@ func scoreBreakdown(result pipeline.Result) string {
 	for _, match := range result.Semantic.Matches {
 		breakdown.Rules = append(breakdown.Rules, ruleScore{ID: match.ID, Group: defaultString(match.Group, "semantic"), Score: match.Score})
 	}
-	data, err := json.Marshal(breakdown)
+	data, err := marshalJSONNoEscape(breakdown)
 	if err != nil {
 		return ""
 	}
@@ -415,6 +519,26 @@ func firstRuleMessage(result pipeline.Result) string {
 		}
 	}
 	return result.Reason
+}
+
+func firstSafeEvidence(result pipeline.Result) string {
+	for _, match := range result.Detection.Matches {
+		for _, evidence := range match.Evidence {
+			if strings.TrimSpace(evidence) == "" || isSensitiveVariable(evidence) {
+				continue
+			}
+			return evidence
+		}
+	}
+	for _, match := range result.Semantic.Matches {
+		for _, evidence := range match.Evidence {
+			if strings.TrimSpace(evidence) == "" || isSensitiveVariable(evidence) {
+				continue
+			}
+			return evidence
+		}
+	}
+	return ""
 }
 
 func primarySemanticMatch(result pipeline.Result) detection.MatchedRule {
@@ -506,7 +630,7 @@ func requestSnippet(req pipeline.Request, limit int) string {
 		for _, parseErr := range req.ParsedRequest.ParseErrors {
 			explanation.ParseErrors = append(explanation.ParseErrors, parseErr.Source+": "+parseErr.Message)
 		}
-		if data, err := json.Marshal(snippetExplanation{RawRequest: builder.String(), NormalizedRequest: explanation}); err == nil {
+		if data, err := marshalJSONNoEscape(snippetExplanation{RawRequest: builder.String(), NormalizedRequest: explanation}); err == nil {
 			return snippet(string(data), limit*4)
 		}
 	}
@@ -539,4 +663,14 @@ func snippet(value string, limit int) string {
 		return value
 	}
 	return value[:limit]
+}
+
+func marshalJSONNoEscape(value any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\r\n"), nil
 }

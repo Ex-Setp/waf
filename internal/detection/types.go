@@ -3,6 +3,8 @@ package detection
 import (
 	"context"
 	"net/http"
+
+	"aegis-waf/internal/requestparser"
 )
 
 type Decision string
@@ -41,6 +43,7 @@ type Request struct {
 	Headers           http.Header
 	Body              string
 	Args              map[string][]string
+	ParsedRequest     requestparser.ParsedRequest
 	EnabledRuleGroups map[string]bool
 }
 

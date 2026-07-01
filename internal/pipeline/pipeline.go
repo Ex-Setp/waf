@@ -285,7 +285,7 @@ func toDetectionRequest(req Request) detection.Request {
 		headers.Set("Host", req.Host)
 	}
 	normalized := normalizer.RequestCopy(normalizer.Request{Method: req.Method, URI: req.Path, Headers: headers, Body: req.Body, Args: req.Args})
-	return detection.Request{Method: normalized.Method, URI: normalized.URI, Headers: normalized.Headers, Body: normalized.Body, Args: normalized.Args, EnabledRuleGroups: req.EnabledRuleGroups}
+	return detection.Request{Method: normalized.Method, URI: normalized.URI, Headers: normalized.Headers, Body: normalized.Body, Args: normalized.Args, ParsedRequest: req.ParsedRequest, EnabledRuleGroups: req.EnabledRuleGroups}
 }
 
 func fromDataplaneDecision(decision dataplane.Decision) Decision {
@@ -371,6 +371,9 @@ func shouldRunSemantic(req Request, detectionResult detection.Result, threshold 
 		return true
 	}
 	for key, values := range normalized.Args {
+		if strings.Contains(key, ".risk") || strings.Contains(key, "files:") || strings.Contains(key, "filename") {
+			return true
+		}
 		if containsHighRiskToken(key) {
 			return true
 		}

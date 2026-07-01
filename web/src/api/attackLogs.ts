@@ -75,15 +75,53 @@ export interface ScoreBreakdown {
   rules: ScoreBreakdownRule[]
 }
 
+export interface SitePolicyExplanation {
+  siteId?: number
+  siteName?: string
+  policyMode?: string
+  blockScoreThreshold?: number
+  runtimeVersion?: string
+  ruleGroups?: string[]
+}
+
+export interface MatchedRuleExplanation {
+  id?: number
+  source?: string
+  group?: string
+  severity?: string
+  score?: number
+  action?: string
+  message?: string
+  evidence?: string[]
+}
+
+export interface RequestVariableExplanation {
+  variable?: string
+  source?: string
+  rawValue?: string
+  normalizedValue?: string
+  decodeSteps?: string[]
+}
+
+export interface NormalizationStepExplanation {
+  variable?: string
+  steps?: string[]
+}
+
+export interface DecisionExplanation {
+  status?: string
+  reason?: string
+}
+
 export interface AttackExplanation {
-  sitePolicy?: Record<string, unknown>
-  matchedRules?: Array<Record<string, unknown>>
+  sitePolicy?: SitePolicyExplanation
+  matchedRules?: MatchedRuleExplanation[]
   scoreBreakdown?: ScoreBreakdown
-  requestVariables?: Array<Record<string, unknown>>
-  normalizationSteps?: Array<Record<string, unknown>>
-  whitelistDecision?: Record<string, unknown>
-  ccBotDecision?: Record<string, unknown>
-  semanticDecision?: Record<string, unknown>
+  requestVariables?: RequestVariableExplanation[]
+  normalizationSteps?: NormalizationStepExplanation[]
+  whitelistDecision?: DecisionExplanation
+  ccBotDecision?: DecisionExplanation
+  semanticDecision?: DecisionExplanation
   finalAction?: string
   reason?: string
 }

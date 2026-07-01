@@ -2701,10 +2701,30 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] 编码/变形 SQLi、XSS、RCE、SSRF 样本可命中。
-- [ ] entropy-only 或普通技术文本不被单独拦截。
-- [ ] 关闭 semanticProtection 后同 payload 不因语义阶段阻断。
-- [ ] 攻击日志完整保存语义 evidence。
+- [x] 编码/变形 SQLi、XSS、RCE、SSRF 样本可命中。
+- [x] entropy-only 或普通技术文本不被单独拦截。
+- [x] 关闭 semanticProtection 后同 payload 不因语义阶段阻断。
+- [x] 攻击日志完整保存语义 evidence。
+
+**完成记录（2026-07-01）：**
+
+- `internal/detection/semantic.go` 扩展语义规则 ID `935005-935008`，新增 `RCEChop`、`SSRFChop`、`UploadChop`、`ProtocolChop` 轻量证据模型；命中输出继续通过 `MatchedRule.Message/Evidence/Source/Group/Score/Action` 携带 normalized value、token、structure、score/action。
+- RCE 识别 command sink、download-execute、command chain、recon command、shell target；SSRF 识别 request sink、internal host、metadata endpoint；Upload 识别 multipart filename、双后缀、webshell extension/code；Protocol 识别危险 scheme、wrapper payload、protocol carrier/smuggling。
+- 误报收敛：新增 `TestT151SemanticEngineAllowsOrdinaryTechnicalText`，覆盖普通 curl/bash 技术文本、公开 callback URL 文档、普通上传说明、协议包装文章不被语义阶段阻断。
+- 新增 `internal/httpserver/t151_semantic_closure_test.go`：验证 expanded semantic upload 命中会落攻击日志，`ExplanationJSON` 保留 `semantic/uploadchop` 与 evidence，`ScoreBreakdown` 保留规则 ID/group；同时验证 `semanticProtection=false` 时 SSRF 语义 payload 不因 semantic stage 阻断。
+- `web/src/api/attackLogs.ts` 增强 attack explanation 类型；`web/src/views/AttackLogsView.vue` 在攻击详情展示 matched-rule evidence chips、score/action/source、request variables、normalized before/after、normalization steps，并提供 `semantic-sqli/semantic-xss/semantic-rce/semantic-ssrf` 快捷筛选；`web/src/views/DashboardView.vue` 对 recent event 的 semantic-* 类型做显式标签展示。
+- `docs/security-coverage-report.md` 已重新生成；当前安全回归仍为 12 个规则文件、564 条 SecRule、攻击阻断率 90.41%（66/73）、良性误报 0/67。
+
+**验证命令：**
+
+- `gofmt -w internal/detection/semantic.go internal/detection/semantic_test.go internal/httpserver/t151_semantic_closure_test.go` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/detection ./internal/httpserver -run 'TestT151|TestSemantic|TestT144' -count=1` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/detection ./internal/pipeline ./internal/httpserver ./internal/auditlog -count=1` 通过。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./... -count=1` 通过。
+- `cd web && npm run build` 通过（仅既有 Rollup pure annotation 与 chunk-size 警告）。
+- `GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go run ./cmd/aegis-securityeval -out docs/security-coverage-report.md` 通过。
+
+**下一任务：** T152：扫描器、Bot 与自动化攻击防护。
 
 #### T152：扫描器、Bot 与自动化攻击防护
 

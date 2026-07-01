@@ -8,7 +8,9 @@ import { useDashboardStore } from '@/stores/dashboard'
 const dashboard = useDashboardStore()
 
 const loadedAtText = computed(() => (dashboard.loadedAt ? dashboard.loadedAt.toLocaleTimeString() : '--'))
-const maxTrendValue = computed(() => Math.max(1, ...dashboard.attackTrend.map((item) => item.requests), ...dashboard.attackTrend.map((item) => item.blocked)))
+const maxTrendValue = computed(() =>
+  Math.max(1, ...dashboard.attackTrend.map((item) => item.requests), ...dashboard.attackTrend.map((item) => item.blocked)),
+)
 
 onMounted(() => {
   void dashboard.loadOverview()
@@ -26,7 +28,11 @@ function healthType(health?: SystemStatus['health']): 'success' | 'warning' | 'd
 }
 
 function healthText(health?: SystemStatus['health']): string {
-  const map: Record<SystemStatus['health'], string> = { ok: '正常', degraded: '降级', down: '异常' }
+  const map: Record<SystemStatus['health'], string> = {
+    ok: '正常',
+    degraded: '降级',
+    down: '异常',
+  }
   return health ? map[health] : '--'
 }
 
@@ -39,8 +45,20 @@ function actionType(action: RecentSecurityEvent['action']): 'success' | 'danger'
 }
 
 function actionText(action: RecentSecurityEvent['action']): string {
-  const map: Record<RecentSecurityEvent['action'], string> = { allow: '放行', block: '拦截', observe: '观察' }
+  const map: Record<RecentSecurityEvent['action'], string> = {
+    allow: '放行',
+    block: '拦截',
+    observe: '观察',
+  }
   return map[action]
+}
+
+function eventTypeTagType(type?: string): 'danger' | 'warning' | 'info' {
+  const normalized = String(type ?? '').toLowerCase()
+  if (normalized.startsWith('semantic-')) return 'danger'
+  if (normalized.includes('sql') || normalized.includes('xss')) return 'warning'
+  if (normalized.includes('rce') || normalized.includes('ssrf')) return 'danger'
+  return 'info'
 }
 
 function formatMetric(metric: DashboardMetric): string {
@@ -73,7 +91,7 @@ function display(value?: string | number | null): string {
       <div class="dashboard-status-main">
         <div>
           <div class="sl-card-title">总览</div>
-          <div class="table-subtext">基于真实 /api/dashboard/overview 返回数据展示，不使用前端演示排行。</div>
+          <div class="table-subtext">基于真实 /api/dashboard/overview 返回数据展示，不使用前端 mock 排行。</div>
         </div>
         <div class="status-card__actions">
           <el-tag :type="healthType(dashboard.status?.health)" effect="light">{{ healthText(dashboard.status?.health) }}</el-tag>
@@ -165,7 +183,11 @@ function display(value?: string | number | null): string {
           <template #default="{ row }: { row: RecentSecurityEvent }"><code>{{ display(row.sourceIp) }}</code></template>
         </el-table-column>
         <el-table-column prop="path" label="路径" min-width="240" show-overflow-tooltip />
-        <el-table-column prop="type" label="类型" width="140" />
+        <el-table-column prop="type" label="类型" width="170">
+          <template #default="{ row }: { row: RecentSecurityEvent }">
+            <el-tag :type="eventTypeTagType(row.type)" effect="plain">{{ display(row.type) }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="动作" width="100">
           <template #default="{ row }: { row: RecentSecurityEvent }">
             <el-tag :type="actionType(row.action)">{{ actionText(row.action) }}</el-tag>

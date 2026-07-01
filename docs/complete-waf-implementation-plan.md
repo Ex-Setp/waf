@@ -2902,11 +2902,34 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] 手动更新规则包成功后 runtime 生效且版本变化。
-- [ ] hash/格式错误的包不会发布。
-- [ ] 更新导致评测退化时阻止上线或要求强确认。
-- [ ] 新增规则更新后，前端能看到版本、hash、评测结果和回滚入口。
-- [ ] emergency CVE 临时规则能快速发布，并在后续规则库中可追踪。
+- [x] 手动更新规则包成功后 runtime 生效且版本变化。
+- [x] hash/格式错误的包不会发布。
+- [x] 更新导致评测退化时阻止上线或要求强确认。
+- [x] 新增规则更新后，前端能看到版本、hash、评测结果和回滚入口。
+- [x] emergency CVE 临时规则能快速发布，并在后续规则库中可追踪。
+
+**完成记录（2026-07-01）：**
+
+- 后端新增 `/api/protection/rule-updates` 流水线入口：summary、publish、rollback、emergency、sources；规则包携带版本、hash、来源、mode 和规则列表，写入 `ProtectionRuleUpdateLog` 审计记录。
+- 新增规则更新源配置模型 `ProtectionRuleUpdateSource`，支持恶意 IP、Tor/代理、Scanner UA、CVE 字典等情报源元数据保存，并在更新摘要中展示。
+- 发布前接入 `internal/securityeval` runtime 候选规则评测；hash/格式错误拒绝发布，评测退化时返回 blocked/rejected，不覆盖 runtime。
+- 支持 observe/gray 灰度：即使输入 deny 规则，runtime 发布前也会转换为 log/observe 行为，能记录命中和分数但不阻断请求。
+- 支持 emergency CVE 临时规则快速发布、日志标记和 rollback；rollback 恢复发布前规则快照并刷新 detection runtime。
+- 前端防护配置页规则区新增“规则 / 情报更新”面板，展示当前版本、hash、状态、评测变化、更新日志、失败/阻断原因、来源、手动发布、回滚和 emergency CVE 操作；API 失败和空数据均显示真实状态，不使用假数据。
+- 覆盖率报告已刷新：SecRule 572；Attack block rate 95.89% (70/73)；Benign false positives 0/67；protocol 7/7；xxe 2/2；api 6/8。
+
+**验证命令（已通过）：**
+
+- `gofmt -w internal/database/database.go internal/database/models.go internal/httpserver/console_api.go internal/securityeval/securityeval.go internal/httpserver/t155_rule_update_api_test.go`
+- `go test ./internal/httpserver -run TestT155 -count=1`
+- `go test ./internal/database ./internal/httpserver ./internal/securityeval -count=1`
+- `go test ./internal/detection ./internal/requestparser ./internal/pipeline ./internal/httpserver -count=1`
+- `go test ./... -count=1`
+- `cd web && npm run build`
+- `go run ./cmd/aegis-securityeval -out docs/security-coverage-report.md`
+- `git diff --check`
+
+**下一任务：** T156：安全覆盖率报告与持续回归门禁。
 
 #### T156：安全覆盖率报告与持续回归门禁
 

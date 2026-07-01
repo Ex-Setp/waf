@@ -44,6 +44,7 @@ type Options struct {
 	CorpusDir                string
 	AttackBlockRateThreshold float64
 	BenignFalsePositiveLimit int
+	RuntimeRules             []detection.Rule
 	Now                      time.Time
 }
 
@@ -122,9 +123,22 @@ func Evaluate(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	manager := crs.NewManager(crs.Config{Enabled: true, RulesDir: opts.RulesDir, ParanoiaLevel: 1, InboundThreshold: 5, OutboundThreshold: 5, RequestBodyLimit: 10 * 1024 * 1024})
-	engine, err := detection.NewCorazaEngine(manager)
+	primaryEngine, err := detection.NewCorazaEngine(manager)
 	if err != nil {
 		return Result{}, err
+	}
+	var engine detection.Engine = primaryEngine
+	if len(opts.RuntimeRules) > 0 {
+		runtimeEngine, err := detection.NewManager("", nil, nil, false)
+		if err != nil {
+			return Result{}, err
+		}
+		for _, rule := range opts.RuntimeRules {
+			if err := runtimeEngine.UpsertRuntimeRule(rule); err != nil {
+				return Result{}, err
+			}
+		}
+		engine = detection.NewCompositeEngine(primaryEngine, runtimeEngine, false)
 	}
 	pipe := pipeline.New(pipeline.Config{}, pipeline.WithDetection(engine), pipeline.WithClock(func() time.Time { return opts.Now }))
 
@@ -133,7 +147,7 @@ func Evaluate(ctx context.Context, opts Options) (Result, error) {
 		RulesDir:      opts.RulesDir,
 		CorpusDir:     opts.CorpusDir,
 		RuleFileCount: status.FileCount,
-		RuleCount:     status.RuleCount,
+		RuleCount:     status.RuleCount + len(opts.RuntimeRules),
 		RuleVersion:   status.Version,
 		Category:      map[string]Bucket{},
 		GeneratedAt:   opts.Now,

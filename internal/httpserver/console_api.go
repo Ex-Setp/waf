@@ -3,13 +3,16 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -566,6 +569,131 @@ type protectionRuleRollbackResponse struct {
 	HotReload      bool                     `json:"hotReload,omitempty"`
 }
 
+type ruleUpdateSourceResponse struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	URL            string `json:"url"`
+	Mode           string `json:"mode"`
+	Enabled        bool   `json:"enabled"`
+	ExpectedHash   string `json:"expectedHash,omitempty"`
+	CurrentVersion string `json:"currentVersion,omitempty"`
+	CurrentHash    string `json:"currentHash,omitempty"`
+	LastStatus     string `json:"lastStatus,omitempty"`
+	LastError      string `json:"lastError,omitempty"`
+	LastSuccessAt  string `json:"lastSuccessAt,omitempty"`
+	UpdatedAt      string `json:"updatedAt,omitempty"`
+}
+
+type ruleUpdateDiffItem struct {
+	RuleID     string                  `json:"ruleId"`
+	Name       string                  `json:"name,omitempty"`
+	ChangeType string                  `json:"changeType"`
+	Before     *protectionRuleResponse `json:"before,omitempty"`
+	After      *protectionRuleResponse `json:"after,omitempty"`
+}
+
+type ruleUpdateEvaluationResponse struct {
+	Passed                    bool                         `json:"passed"`
+	Summary                   string                       `json:"summary,omitempty"`
+	BlockedReason             string                       `json:"blockedReason,omitempty"`
+	AttackBlockRate           float64                      `json:"attackBlockRate"`
+	AttackBlockRateDelta      float64                      `json:"attackBlockRateDelta"`
+	BenignFalsePositives      int                          `json:"benignFalsePositives"`
+	BenignFalsePositivesDelta int                          `json:"benignFalsePositivesDelta"`
+	MissedAttacks             []securityeval.SampleOutcome `json:"missedAttacks,omitempty"`
+	FalsePositives            []securityeval.SampleOutcome `json:"falsePositives,omitempty"`
+}
+
+type ruleUpdateLogResponse struct {
+	ID              string                       `json:"id"`
+	UpdateID        string                       `json:"updateId"`
+	SourceID        string                       `json:"sourceId,omitempty"`
+	SourceName      string                       `json:"sourceName,omitempty"`
+	Trigger         string                       `json:"trigger"`
+	Type            string                       `json:"type"`
+	Status          string                       `json:"status"`
+	Mode            string                       `json:"mode"`
+	PackageVersion  string                       `json:"packageVersion,omitempty"`
+	PackageHash     string                       `json:"packageHash,omitempty"`
+	PackageURL      string                       `json:"packageUrl,omitempty"`
+	RuntimeVersion  string                       `json:"runtimeVersion,omitempty"`
+	Published       bool                         `json:"published"`
+	Emergency       bool                         `json:"emergency"`
+	EmergencyCVE    string                       `json:"emergencyCve,omitempty"`
+	RuleCount       int                          `json:"ruleCount"`
+	NewRules        int                          `json:"newRules"`
+	RemovedRules    int                          `json:"removedRules"`
+	ModifiedRules   int                          `json:"modifiedRules"`
+	BlockedReason   string                       `json:"blockedReason,omitempty"`
+	ErrorMessage    string                       `json:"errorMessage,omitempty"`
+	RollbackFrom    string                       `json:"rollbackFrom,omitempty"`
+	RolledBackTo    string                       `json:"rolledBackTo,omitempty"`
+	SnapshotVersion string                       `json:"snapshotVersion,omitempty"`
+	Evaluation      ruleUpdateEvaluationResponse `json:"evaluation"`
+	Diff            []ruleUpdateDiffItem         `json:"diff,omitempty"`
+	PublishedRules  []protectionRuleResponse     `json:"publishedRules,omitempty"`
+	CreatedAt       string                       `json:"createdAt"`
+	UpdatedAt       string                       `json:"updatedAt"`
+}
+
+type ruleUpdateSummaryResponse struct {
+	CurrentVersion    string                     `json:"currentVersion,omitempty"`
+	CurrentHash       string                     `json:"currentHash,omitempty"`
+	CurrentRuleCount  int                        `json:"currentRuleCount"`
+	CurrentStatus     string                     `json:"currentStatus,omitempty"`
+	LastPublishedAt   string                     `json:"lastPublishedAt,omitempty"`
+	LastBlockedReason string                     `json:"lastBlockedReason,omitempty"`
+	LastFailureReason string                     `json:"lastFailureReason,omitempty"`
+	Latest            *ruleUpdateLogResponse     `json:"latest,omitempty"`
+	Sources           []ruleUpdateSourceResponse `json:"sources"`
+	Logs              []ruleUpdateLogResponse    `json:"logs"`
+	RuntimeVersion    string                     `json:"runtimeVersion,omitempty"`
+	HotReload         bool                       `json:"hotReload,omitempty"`
+}
+
+type ruleUpdatePackagePayload struct {
+	Type    string                  `json:"type"`
+	Version string                  `json:"version"`
+	Hash    string                  `json:"hash"`
+	Mode    string                  `json:"mode"`
+	Rules   []protectionRulePayload `json:"rules"`
+}
+
+type ruleUpdateManualPayload struct {
+	SourceID     string                    `json:"sourceId"`
+	UseSource    bool                      `json:"useSource"`
+	ObserveOnly  bool                      `json:"observeOnly"`
+	GrayMode     bool                      `json:"grayMode"`
+	PackageURL   string                    `json:"packageUrl"`
+	ExpectedHash string                    `json:"expectedHash"`
+	Type         string                    `json:"type"`
+	Package      *ruleUpdatePackagePayload `json:"package"`
+}
+
+type ruleUpdateSourcePayload struct {
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	URL          string `json:"url"`
+	Mode         string `json:"mode"`
+	Enabled      *bool  `json:"enabled"`
+	ExpectedHash string `json:"expectedHash"`
+}
+
+type ruleUpdateRollbackPayload struct {
+	UpdateID string `json:"updateId"`
+	Version  string `json:"version"`
+}
+
+type emergencyRulePublishPayload struct {
+	CVE         string                `json:"cve"`
+	Version     string                `json:"version"`
+	Hash        string                `json:"hash"`
+	Description string                `json:"description"`
+	ObserveOnly bool                  `json:"observeOnly"`
+	Rule        protectionRulePayload `json:"rule"`
+}
+
 type protectionRuleTestPayload struct {
 	Method  string                 `json:"method"`
 	Path    string                 `json:"path"`
@@ -725,6 +853,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/protection/rules" || strings.HasPrefix(path, "/protection/rules/") {
 		s.handleProtectionRulesAPI(w, r, strings.TrimPrefix(path, "/protection/rules"))
+		return
+	}
+	if path == "/protection/rule-updates" || strings.HasPrefix(path, "/protection/rule-updates/") {
+		s.handleProtectionRuleUpdatesAPI(w, r, strings.TrimPrefix(path, "/protection/rule-updates"))
 		return
 	}
 	if path == "/protection/rule-sets" {
@@ -2089,6 +2221,32 @@ func (s *Server) handleProtectionSecurityCoverageAPI(w http.ResponseWriter, r *h
 	})
 }
 
+func (s *Server) handleProtectionRuleUpdatesAPI(w http.ResponseWriter, r *http.Request, suffix string) {
+	if s.db == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "database unavailable"})
+		return
+	}
+	operation := strings.Trim(strings.TrimSpace(suffix), "/")
+	switch operation {
+	case "", "/":
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.ruleUpdateSummary(r.Context()))
+	case "sources":
+		s.handleProtectionRuleUpdateSourcesAPI(w, r)
+	case "publish":
+		s.handleProtectionRuleUpdatePublishAPI(w, r)
+	case "rollback":
+		s.handleProtectionRuleUpdateRollbackAPI(w, r)
+	case "emergency":
+		s.handleProtectionEmergencyRuleAPI(w, r)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "rule update endpoint not found"})
+	}
+}
+
 func (s *Server) handleProtectionRulesAPI(w http.ResponseWriter, r *http.Request, suffix string) {
 	if s.db == nil {
 		if r.Method == http.MethodGet && (suffix == "" || suffix == "/") {
@@ -2752,6 +2910,794 @@ func (s *Server) reloadProtectionRuleState(ctx context.Context) (string, bool, e
 
 func currentProtectionRuleRuntimeVersion() string {
 	return fmt.Sprintf("rules-%d", time.Now().UnixMilli())
+}
+
+func (s *Server) handleProtectionRuleUpdatePublishAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var payload ruleUpdateManualPayload
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
+		return
+	}
+	logEntry, statusCode, err := s.publishRuleUpdate(r.Context(), payload)
+	if err != nil {
+		writeJSON(w, statusCode, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, statusCode, logEntry)
+}
+
+func (s *Server) handleProtectionRuleUpdateSourcesAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var payload ruleUpdateSourcePayload
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
+		return
+	}
+	source, created, err := s.upsertRuleUpdateSource(r.Context(), payload)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	statusCode := http.StatusOK
+	if created {
+		statusCode = http.StatusCreated
+	}
+	writeJSON(w, statusCode, ruleUpdateSourceResponse{
+		ID:             fmt.Sprintf("%d", source.ID),
+		Name:           source.Name,
+		Type:           source.Type,
+		URL:            source.URL,
+		Mode:           firstNonEmpty(source.Mode, "block"),
+		Enabled:        source.Enabled,
+		ExpectedHash:   source.ExpectedHash,
+		CurrentVersion: source.CurrentVersion,
+		CurrentHash:    source.CurrentHash,
+		LastStatus:     source.LastStatus,
+		LastError:      source.LastError,
+		LastSuccessAt:  formatMillis(source.LastSuccessAt),
+		UpdatedAt:      formatMillis(source.UpdatedAt),
+	})
+}
+
+func (s *Server) handleProtectionRuleUpdateRollbackAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var payload ruleUpdateRollbackPayload
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
+		return
+	}
+	logEntry, statusCode, err := s.rollbackRuleUpdate(r.Context(), payload)
+	if err != nil {
+		writeJSON(w, statusCode, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, statusCode, logEntry)
+}
+
+func (s *Server) handleProtectionEmergencyRuleAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var payload emergencyRulePublishPayload
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
+		return
+	}
+	logEntry, statusCode, err := s.publishEmergencyRule(r.Context(), payload)
+	if err != nil {
+		writeJSON(w, statusCode, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, statusCode, logEntry)
+}
+
+func (s *Server) ruleUpdateSummary(ctx context.Context) ruleUpdateSummaryResponse {
+	runtimeVersion := currentProtectionRuleRuntimeVersion()
+	hotReload := s.detectionEngine != nil
+	var logs []database.ProtectionRuleUpdateLog
+	_ = s.db.WithContext(ctx).Order("id desc").Limit(10).Find(&logs).Error
+	var sources []database.ProtectionRuleUpdateSource
+	_ = s.db.WithContext(ctx).Order("id asc").Find(&sources).Error
+	var rules []database.ProtectionRule
+	_ = s.db.WithContext(ctx).Order("rule_id asc").Find(&rules).Error
+	currentHash := protectionRuleSetHash(rules)
+	var latest *ruleUpdateLogResponse
+	logResponses := make([]ruleUpdateLogResponse, 0, len(logs))
+	for _, item := range logs {
+		resp := s.ruleUpdateLogToAPI(item)
+		logResponses = append(logResponses, resp)
+		if latest == nil {
+			copy := resp
+			latest = &copy
+		}
+	}
+	status := ""
+	lastPublishedAt := ""
+	lastBlockedReason := ""
+	lastFailureReason := ""
+	if latest != nil {
+		status = latest.Status
+		lastPublishedAt = latest.CreatedAt
+		lastBlockedReason = latest.BlockedReason
+		lastFailureReason = latest.ErrorMessage
+	}
+	return ruleUpdateSummaryResponse{
+		CurrentVersion:    latestRuleUpdateVersion(logResponses, runtimeVersion),
+		CurrentHash:       currentHash,
+		CurrentRuleCount:  len(rules),
+		CurrentStatus:     status,
+		LastPublishedAt:   lastPublishedAt,
+		LastBlockedReason: lastBlockedReason,
+		LastFailureReason: lastFailureReason,
+		Latest:            latest,
+		Sources:           ruleUpdateSourcesToAPI(sources),
+		Logs:              logResponses,
+		RuntimeVersion:    runtimeVersion,
+		HotReload:         hotReload,
+	}
+}
+
+func latestRuleUpdateVersion(logs []ruleUpdateLogResponse, runtimeVersion string) string {
+	for _, item := range logs {
+		if item.Published && strings.TrimSpace(item.PackageVersion) != "" {
+			return item.PackageVersion
+		}
+	}
+	return runtimeVersion
+}
+
+func ruleUpdateSourcesToAPI(items []database.ProtectionRuleUpdateSource) []ruleUpdateSourceResponse {
+	out := make([]ruleUpdateSourceResponse, 0, len(items))
+	for _, item := range items {
+		out = append(out, ruleUpdateSourceResponse{
+			ID:             fmt.Sprintf("%d", item.ID),
+			Name:           item.Name,
+			Type:           item.Type,
+			URL:            item.URL,
+			Mode:           firstNonEmpty(item.Mode, "block"),
+			Enabled:        item.Enabled,
+			ExpectedHash:   item.ExpectedHash,
+			CurrentVersion: item.CurrentVersion,
+			CurrentHash:    item.CurrentHash,
+			LastStatus:     item.LastStatus,
+			LastError:      item.LastError,
+			LastSuccessAt:  formatMillis(item.LastSuccessAt),
+			UpdatedAt:      formatMillis(item.UpdatedAt),
+		})
+	}
+	return out
+}
+
+func (s *Server) publishRuleUpdate(ctx context.Context, payload ruleUpdateManualPayload) (ruleUpdateLogResponse, int, error) {
+	source, err := s.resolveRuleUpdateSource(ctx, payload)
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusBadRequest, err
+	}
+	rules, pkgMeta, validationErrors, err := s.resolveRuleUpdatePackage(payload)
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusBadRequest, err
+	}
+	if len(validationErrors) > 0 {
+		return ruleUpdateLogResponse{}, http.StatusBadRequest, errors.New(formatRuleValidationErrors(validationErrors))
+	}
+	existingRules, err := s.loadPersistedProtectionRules(ctx)
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusInternalServerError, err
+	}
+	packageHash := firstNonEmpty(strings.TrimSpace(pkgMeta.Hash), protectionRuleSetHash(rules))
+	if source != nil && strings.TrimSpace(source.ExpectedHash) != "" && !strings.EqualFold(strings.TrimSpace(source.ExpectedHash), packageHash) {
+		logEntry, _ := s.persistRuleUpdateLog(ctx, s.buildRuleUpdateLog(existingRules, rules, *source, pkgMeta, "rejected", false, false, ruleUpdateEvaluationResponse{}, "hash mismatch", "", "", ""))
+		return logEntry, http.StatusBadRequest, fmt.Errorf("hash mismatch")
+	}
+	if strings.TrimSpace(payload.ExpectedHash) != "" && !strings.EqualFold(strings.TrimSpace(payload.ExpectedHash), packageHash) {
+		logEntry, _ := s.persistRuleUpdateLog(ctx, s.buildRuleUpdateLog(existingRules, rules, sourceOrDefault(source), pkgMeta, "rejected", false, false, ruleUpdateEvaluationResponse{}, "hash mismatch", "", "", ""))
+		return logEntry, http.StatusBadRequest, fmt.Errorf("hash mismatch")
+	}
+	evaluation, err := s.evaluateCandidateRuleSet(ctx, existingRules, rules)
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusInternalServerError, err
+	}
+	mode := normalizeRuleUpdateMode(payload.ObserveOnly, payload.GrayMode, pkgMeta.Mode, source)
+	runtimeRules := runtimeProtectionRulesForMode(mode, rules)
+	allowPublish := evaluation.Passed || mode != "block"
+	status := "blocked"
+	blockedReason := evaluation.BlockedReason
+	if allowPublish {
+		status = "published"
+	}
+	pkgMeta.Mode = mode
+	diff := diffProtectionRules(existingRules, runtimeRules)
+	logModel := s.buildRuleUpdateLog(existingRules, runtimeRules, sourceOrDefault(source), pkgMeta, status, allowPublish, false, evaluation, blockedReason, "", "", "")
+	if !allowPublish {
+		logEntry, _ := s.persistRuleUpdateLog(ctx, logModel)
+		return logEntry, http.StatusConflict, nil
+	}
+	runtimeVersion, hotReload, err := s.replaceProtectionRules(ctx, "rule-update-publish", cloneProtectionRules(runtimeRules))
+	if err != nil {
+		logModel.Status = "failed"
+		logModel.ErrorMessage = err.Error()
+		logEntry, _ := s.persistRuleUpdateLog(ctx, logModel)
+		return logEntry, http.StatusInternalServerError, err
+	}
+	logModel.RuntimeVersion = runtimeVersion
+	logModel.Published = true
+	logModel.RuleCount = len(runtimeRules)
+	logModel.DiffJSON = marshalJSON(diff)
+	logModel.PublishedRulesJSON = marshalJSON(protectionRulesToAPI(runtimeRules, runtimeVersion, hotReload))
+	logEntry, saved := s.persistRuleUpdateLog(ctx, logModel)
+	if source != nil {
+		source.CurrentVersion = pkgMeta.Version
+		source.CurrentHash = packageHash
+		source.LastStatus = logModel.Status
+		source.LastError = logModel.BlockedReason
+		source.LastSuccessAt = time.Now().UnixMilli()
+		_ = s.db.WithContext(ctx).Save(source).Error
+	}
+	s.recordAuditEvent(ctx, "protection_rule_update", 0, "", fmt.Sprintf("rule-update:%s", saved.UpdateID), "publish", fmt.Sprintf("version=%s hash=%s mode=%s", pkgMeta.Version, packageHash, mode))
+	return logEntry, http.StatusOK, nil
+}
+
+func (s *Server) publishEmergencyRule(ctx context.Context, payload emergencyRulePublishPayload) (ruleUpdateLogResponse, int, error) {
+	rule, validationErrors := validateProtectionRulePayload(payload.Rule, 0)
+	if len(validationErrors) > 0 {
+		return ruleUpdateLogResponse{}, http.StatusBadRequest, errors.New(formatRuleValidationErrors(validationErrors))
+	}
+	rule.Source = "system"
+	if strings.TrimSpace(payload.CVE) == "" {
+		return ruleUpdateLogResponse{}, http.StatusBadRequest, fmt.Errorf("cve is required")
+	}
+	existingRules, err := s.loadPersistedProtectionRules(ctx)
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusInternalServerError, err
+	}
+	rules := upsertProtectionRule(existingRules, rule)
+	meta := ruleUpdatePackageMeta{
+		Type:    "emergency-cve",
+		Version: firstNonEmpty(strings.TrimSpace(payload.Version), fmt.Sprintf("%s-%d", strings.ToLower(strings.TrimSpace(payload.CVE)), time.Now().UnixMilli())),
+		Hash:    firstNonEmpty(strings.TrimSpace(payload.Hash), protectionRuleSetHash(rules)),
+		URL:     "",
+		Mode:    ternary(payload.ObserveOnly, "observe", "block"),
+	}
+	evaluation, err := s.evaluateCandidateRuleSet(ctx, existingRules, rules)
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusInternalServerError, err
+	}
+	if payload.ObserveOnly {
+		evaluation.Passed = true
+		evaluation.BlockedReason = ""
+	}
+	mode := normalizeRuleUpdateMode(payload.ObserveOnly, false, meta.Mode, nil)
+	status := "published"
+	if !evaluation.Passed && mode == "block" {
+		status = "blocked"
+	}
+	logModel := s.buildRuleUpdateLog(existingRules, rules, database.ProtectionRuleUpdateSource{Name: "emergency-cve", Type: "emergency"}, meta, status, status == "published", true, evaluation, evaluation.BlockedReason, "", "", "")
+	logModel.EmergencyCVE = payload.CVE
+	if status != "published" {
+		logEntry, _ := s.persistRuleUpdateLog(ctx, logModel)
+		return logEntry, http.StatusConflict, nil
+	}
+	runtimeVersion, hotReload, err := s.replaceProtectionRules(ctx, "rule-update-emergency", cloneProtectionRules(rules))
+	if err != nil {
+		logModel.Status = "failed"
+		logModel.ErrorMessage = err.Error()
+		logEntry, _ := s.persistRuleUpdateLog(ctx, logModel)
+		return logEntry, http.StatusInternalServerError, err
+	}
+	logModel.RuntimeVersion = runtimeVersion
+	logModel.Published = true
+	logModel.PublishedRulesJSON = marshalJSON(protectionRulesToAPI(rules, runtimeVersion, hotReload))
+	logEntry, saved := s.persistRuleUpdateLog(ctx, logModel)
+	s.recordAuditEvent(ctx, "protection_rule_update", 0, "", fmt.Sprintf("rule-update:%s", saved.UpdateID), "emergency-publish", fmt.Sprintf("%s %s", payload.CVE, meta.Version))
+	return logEntry, http.StatusOK, nil
+}
+
+func (s *Server) rollbackRuleUpdate(ctx context.Context, payload ruleUpdateRollbackPayload) (ruleUpdateLogResponse, int, error) {
+	var target database.ProtectionRuleUpdateLog
+	query := s.db.WithContext(ctx).Order("id desc")
+	switch {
+	case strings.TrimSpace(payload.UpdateID) != "":
+		query = query.Where("update_id = ?", strings.TrimSpace(payload.UpdateID))
+	case strings.TrimSpace(payload.Version) != "":
+		query = query.Where("package_version = ?", strings.TrimSpace(payload.Version))
+	default:
+		query = query.Where("published = ?", true)
+	}
+	if err := query.First(&target).Error; err != nil {
+		return ruleUpdateLogResponse{}, http.StatusBadRequest, fmt.Errorf("no published rule update found")
+	}
+	var rollbackRules []database.ProtectionRule
+	if err := json.Unmarshal([]byte(target.PrePublishRulesJSON), &rollbackRules); err != nil || len(rollbackRules) == 0 {
+		var snapshot database.ProtectionRulePublishSnapshot
+		if err := s.db.WithContext(ctx).Where("action LIKE ?", "rule-update%").Order("id asc").First(&snapshot).Error; err != nil {
+			return ruleUpdateLogResponse{}, http.StatusInternalServerError, fmt.Errorf("rollback snapshot unavailable")
+		}
+		if err := json.Unmarshal([]byte(snapshot.RulesJSON), &rollbackRules); err != nil {
+			return ruleUpdateLogResponse{}, http.StatusInternalServerError, err
+		}
+	}
+	currentRules, err := s.loadPersistedProtectionRules(ctx)
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusInternalServerError, err
+	}
+	runtimeVersion, hotReload, err := s.replaceProtectionRules(ctx, "rule-update-rollback", cloneProtectionRules(rollbackRules))
+	if err != nil {
+		return ruleUpdateLogResponse{}, http.StatusInternalServerError, err
+	}
+	meta := ruleUpdatePackageMeta{
+		Type:    "rollback",
+		Version: firstNonEmpty(target.RollbackFromVersion, target.PackageVersion),
+		Hash:    protectionRuleSetHash(rollbackRules),
+		Mode:    "block",
+	}
+	evaluation, evalErr := s.evaluateCandidateRuleSet(ctx, currentRules, rollbackRules)
+	if evalErr != nil {
+		evaluation = ruleUpdateEvaluationResponse{Passed: true, Summary: evalErr.Error()}
+	}
+	logModel := s.buildRuleUpdateLog(currentRules, rollbackRules, database.ProtectionRuleUpdateSource{Name: "rollback", Type: "rollback"}, meta, "rolled-back", true, false, evaluation, "", currentProtectionRuleRuntimeVersion(), target.PackageVersion, "")
+	logModel.RuntimeVersion = runtimeVersion
+	logModel.RolledBackToVersion = target.PackageVersion
+	logModel.RollbackSnapshotVersion = target.UpdateID
+	logModel.PublishedRulesJSON = marshalJSON(protectionRulesToAPI(rollbackRules, runtimeVersion, hotReload))
+	logEntry, saved := s.persistRuleUpdateLog(ctx, logModel)
+	s.recordAuditEvent(ctx, "protection_rule_update", 0, "", fmt.Sprintf("rule-update:%s", saved.UpdateID), "rollback", target.PackageVersion)
+	return logEntry, http.StatusOK, nil
+}
+
+type ruleUpdatePackageMeta struct {
+	Type    string
+	Version string
+	Hash    string
+	URL     string
+	Mode    string
+}
+
+func (s *Server) resolveRuleUpdatePackage(payload ruleUpdateManualPayload) ([]database.ProtectionRule, ruleUpdatePackageMeta, []protectionRuleValidationError, error) {
+	if payload.Package == nil {
+		return nil, ruleUpdatePackageMeta{}, nil, fmt.Errorf("package is required")
+	}
+	rules := make([]database.ProtectionRule, 0, len(payload.Package.Rules))
+	validationErrors := make([]protectionRuleValidationError, 0)
+	seenRuleIDs := map[int]int{}
+	for idx, rulePayload := range payload.Package.Rules {
+		rule, errs := validateProtectionRulePayload(rulePayload, 0)
+		for _, validationError := range errs {
+			validationError.Line = idx + 1
+			validationErrors = append(validationErrors, validationError)
+		}
+		if len(errs) > 0 {
+			continue
+		}
+		if line, ok := seenRuleIDs[rule.RuleID]; ok {
+			validationErrors = append(validationErrors, protectionRuleValidationError{Field: "ruleId", Line: idx + 1, Message: fmt.Sprintf("duplicate ruleId already used at line %d", line)})
+			continue
+		}
+		seenRuleIDs[rule.RuleID] = idx + 1
+		rule.Source = "custom"
+		rules = append(rules, rule)
+	}
+	if len(payload.Package.Rules) == 0 {
+		validationErrors = append(validationErrors, protectionRuleValidationError{Field: "rules", Line: 1, Message: "rule list is required"})
+	}
+	return rules, ruleUpdatePackageMeta{
+		Type:    firstNonEmpty(strings.TrimSpace(payload.Package.Type), strings.TrimSpace(payload.Type), "manual"),
+		Version: firstNonEmpty(strings.TrimSpace(payload.Package.Version), fmt.Sprintf("manual-%d", time.Now().UnixMilli())),
+		Hash:    strings.TrimSpace(payload.Package.Hash),
+		URL:     strings.TrimSpace(payload.PackageURL),
+		Mode:    strings.TrimSpace(payload.Package.Mode),
+	}, validationErrors, nil
+}
+
+func (s *Server) resolveRuleUpdateSource(ctx context.Context, payload ruleUpdateManualPayload) (*database.ProtectionRuleUpdateSource, error) {
+	if !payload.UseSource && strings.TrimSpace(payload.SourceID) == "" {
+		return nil, nil
+	}
+	id, hasID, err := parseID(strings.TrimSpace(payload.SourceID))
+	if err != nil || !hasID {
+		return nil, fmt.Errorf("invalid source id")
+	}
+	var source database.ProtectionRuleUpdateSource
+	if err := s.db.WithContext(ctx).First(&source, id).Error; err != nil {
+		return nil, fmt.Errorf("rule update source not found")
+	}
+	return &source, nil
+}
+
+func sourceOrDefault(source *database.ProtectionRuleUpdateSource) database.ProtectionRuleUpdateSource {
+	if source != nil {
+		return *source
+	}
+	return database.ProtectionRuleUpdateSource{Name: "manual", Type: "manual", Mode: "block", Enabled: true}
+}
+
+func runtimeProtectionRulesForMode(mode string, rules []database.ProtectionRule) []database.ProtectionRule {
+	out := cloneProtectionRules(rules)
+	if mode != "observe" {
+		return out
+	}
+	for i := range out {
+		if isBlockingProtectionRuleAction(out[i].Action) {
+			out[i].Action = "log"
+		}
+	}
+	return out
+}
+
+func isBlockingProtectionRuleAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "deny", "block":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeRuleUpdateMode(observeOnly, grayMode bool, requested string, source *database.ProtectionRuleUpdateSource) string {
+	if observeOnly || grayMode {
+		return "observe"
+	}
+	mode := strings.ToLower(strings.TrimSpace(requested))
+	if mode == "" && source != nil {
+		mode = strings.ToLower(strings.TrimSpace(source.Mode))
+	}
+	switch mode {
+	case "observe", "gray":
+		return "observe"
+	default:
+		return "block"
+	}
+}
+
+func normalizeRuleUpdateSourceMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "block":
+		return "block"
+	case "observe", "gray":
+		return "observe"
+	default:
+		return ""
+	}
+}
+
+func (s *Server) upsertRuleUpdateSource(ctx context.Context, payload ruleUpdateSourcePayload) (database.ProtectionRuleUpdateSource, bool, error) {
+	source := database.ProtectionRuleUpdateSource{
+		Name:         strings.TrimSpace(payload.Name),
+		Type:         strings.TrimSpace(payload.Type),
+		URL:          strings.TrimSpace(payload.URL),
+		Mode:         normalizeRuleUpdateSourceMode(payload.Mode),
+		ExpectedHash: strings.TrimSpace(payload.ExpectedHash),
+	}
+	if source.Name == "" {
+		return database.ProtectionRuleUpdateSource{}, false, fmt.Errorf("name is required")
+	}
+	if source.Type == "" {
+		return database.ProtectionRuleUpdateSource{}, false, fmt.Errorf("type is required")
+	}
+	if source.Mode == "" {
+		return database.ProtectionRuleUpdateSource{}, false, fmt.Errorf("mode must be block, observe, or gray")
+	}
+	source.Enabled = true
+	if payload.Enabled != nil {
+		source.Enabled = *payload.Enabled
+	}
+	var existing database.ProtectionRuleUpdateSource
+	err := s.db.WithContext(ctx).Where("name = ? AND type = ?", source.Name, source.Type).First(&existing).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return database.ProtectionRuleUpdateSource{}, false, err
+		}
+		if err := s.db.WithContext(ctx).Create(&source).Error; err != nil {
+			return database.ProtectionRuleUpdateSource{}, false, err
+		}
+		return source, true, nil
+	}
+	existing.URL = source.URL
+	existing.Mode = source.Mode
+	existing.Enabled = source.Enabled
+	existing.ExpectedHash = source.ExpectedHash
+	if err := s.db.WithContext(ctx).Save(&existing).Error; err != nil {
+		return database.ProtectionRuleUpdateSource{}, false, err
+	}
+	return existing, false, nil
+}
+
+func (s *Server) evaluateCandidateRuleSet(ctx context.Context, baseline, candidate []database.ProtectionRule) (ruleUpdateEvaluationResponse, error) {
+	baselineResult, err := securityeval.Evaluate(ctx, securityeval.Options{RuntimeRules: protectionRulesToDetection(baseline)})
+	if err != nil {
+		return ruleUpdateEvaluationResponse{}, err
+	}
+	candidateResult, err := securityeval.Evaluate(ctx, securityeval.Options{RuntimeRules: protectionRulesToDetection(candidate)})
+	if err != nil {
+		return ruleUpdateEvaluationResponse{}, err
+	}
+	blockedReason := ""
+	passed := true
+	if err := candidateResult.Validate(); err != nil {
+		passed = false
+		blockedReason = err.Error()
+	}
+	attackDelta := candidateResult.AttackBlockRate - baselineResult.AttackBlockRate
+	fpDelta := candidateResult.BenignFalsePositives - baselineResult.BenignFalsePositives
+	if attackDelta < 0 || fpDelta > 0 {
+		passed = false
+		if blockedReason == "" {
+			var reasons []string
+			if attackDelta < 0 {
+				reasons = append(reasons, fmt.Sprintf("attack block rate regressed by %.2f%%", attackDelta*100))
+			}
+			if fpDelta > 0 {
+				reasons = append(reasons, fmt.Sprintf("benign false positives increased by %d", fpDelta))
+			}
+			blockedReason = strings.Join(reasons, "; ")
+		}
+	}
+	summary := fmt.Sprintf("attack %.2f%% -> %.2f%%, false positives %d -> %d", baselineResult.AttackBlockRate*100, candidateResult.AttackBlockRate*100, baselineResult.BenignFalsePositives, candidateResult.BenignFalsePositives)
+	return ruleUpdateEvaluationResponse{
+		Passed:                    passed,
+		Summary:                   summary,
+		BlockedReason:             blockedReason,
+		AttackBlockRate:           candidateResult.AttackBlockRate,
+		AttackBlockRateDelta:      attackDelta,
+		BenignFalsePositives:      candidateResult.BenignFalsePositives,
+		BenignFalsePositivesDelta: fpDelta,
+		MissedAttacks:             candidateResult.MissedAttacks,
+		FalsePositives:            candidateResult.FalsePositives,
+	}, nil
+}
+
+func (s *Server) loadPersistedProtectionRules(ctx context.Context) ([]database.ProtectionRule, error) {
+	var rules []database.ProtectionRule
+	if err := s.db.WithContext(ctx).Order("rule_id asc").Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func protectionRulesToDetection(rules []database.ProtectionRule) []detection.Rule {
+	out := make([]detection.Rule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, protectionRuleToDetection(rule))
+	}
+	return out
+}
+
+func protectionRulesToAPI(rules []database.ProtectionRule, runtimeVersion string, hotReload bool) []protectionRuleResponse {
+	out := make([]protectionRuleResponse, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, protectionRuleToAPI(rule, 0, runtimeVersion, hotReload))
+	}
+	return out
+}
+
+func cloneProtectionRules(rules []database.ProtectionRule) []database.ProtectionRule {
+	out := make([]database.ProtectionRule, len(rules))
+	copy(out, rules)
+	return out
+}
+
+func protectionRuleSetHash(rules []database.ProtectionRule) string {
+	data, _ := json.Marshal(normalizeProtectionRulesForHash(rules))
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func normalizeProtectionRulesForHash(rules []database.ProtectionRule) []database.ProtectionRule {
+	out := cloneProtectionRules(rules)
+	sort.Slice(out, func(i, j int) bool { return out[i].RuleID < out[j].RuleID })
+	for i := range out {
+		out[i].ID = 0
+		out[i].CreatedAt = 0
+		out[i].UpdatedAt = 0
+	}
+	return out
+}
+
+func upsertProtectionRule(existing []database.ProtectionRule, rule database.ProtectionRule) []database.ProtectionRule {
+	out := cloneProtectionRules(existing)
+	for i := range out {
+		if out[i].RuleID == rule.RuleID {
+			rule.ID = out[i].ID
+			rule.CreatedAt = out[i].CreatedAt
+			out[i] = rule
+			return out
+		}
+	}
+	out = append(out, rule)
+	sort.Slice(out, func(i, j int) bool { return out[i].RuleID < out[j].RuleID })
+	return out
+}
+
+func diffProtectionRules(before, after []database.ProtectionRule) []ruleUpdateDiffItem {
+	beforeMap := make(map[int]database.ProtectionRule, len(before))
+	afterMap := make(map[int]database.ProtectionRule, len(after))
+	for _, rule := range before {
+		beforeMap[rule.RuleID] = rule
+	}
+	for _, rule := range after {
+		afterMap[rule.RuleID] = rule
+	}
+	ids := make([]int, 0, len(beforeMap)+len(afterMap))
+	seen := map[int]struct{}{}
+	for id := range beforeMap {
+		ids = append(ids, id)
+		seen[id] = struct{}{}
+	}
+	for id := range afterMap {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	out := make([]ruleUpdateDiffItem, 0)
+	for _, id := range ids {
+		beforeRule, hasBefore := beforeMap[id]
+		afterRule, hasAfter := afterMap[id]
+		switch {
+		case !hasBefore && hasAfter:
+			api := protectionRuleToAPI(afterRule, 0, "", false)
+			out = append(out, ruleUpdateDiffItem{RuleID: api.RuleID, Name: api.Name, ChangeType: "new", After: &api})
+		case hasBefore && !hasAfter:
+			api := protectionRuleToAPI(beforeRule, 0, "", false)
+			out = append(out, ruleUpdateDiffItem{RuleID: api.RuleID, Name: api.Name, ChangeType: "removed", Before: &api})
+		default:
+			beforeNorm := beforeRule
+			afterNorm := afterRule
+			beforeNorm.ID, beforeNorm.CreatedAt, beforeNorm.UpdatedAt = 0, 0, 0
+			afterNorm.ID, afterNorm.CreatedAt, afterNorm.UpdatedAt = 0, 0, 0
+			if reflect.DeepEqual(beforeNorm, afterNorm) {
+				continue
+			}
+			beforeAPI := protectionRuleToAPI(beforeRule, 0, "", false)
+			afterAPI := protectionRuleToAPI(afterRule, 0, "", false)
+			out = append(out, ruleUpdateDiffItem{RuleID: afterAPI.RuleID, Name: firstNonEmpty(afterAPI.Name, beforeAPI.Name), ChangeType: "modified", Before: &beforeAPI, After: &afterAPI})
+		}
+	}
+	return out
+}
+
+func (s *Server) buildRuleUpdateLog(before, after []database.ProtectionRule, source database.ProtectionRuleUpdateSource, meta ruleUpdatePackageMeta, status string, published, emergency bool, evaluation ruleUpdateEvaluationResponse, blockedReason, rollbackFrom, rolledBackTo, snapshotVersion string) database.ProtectionRuleUpdateLog {
+	diff := diffProtectionRules(before, after)
+	updateID := fmt.Sprintf("ru-%d", time.Now().UnixMilli())
+	return database.ProtectionRuleUpdateLog{
+		UpdateID:                  updateID,
+		SourceID:                  source.ID,
+		SourceName:                firstNonEmpty(source.Name, "manual"),
+		Trigger:                   ternary(source.ID > 0, "source", "manual"),
+		Type:                      firstNonEmpty(meta.Type, source.Type, "manual"),
+		Status:                    status,
+		Mode:                      firstNonEmpty(meta.Mode, source.Mode, "block"),
+		PackageVersion:            meta.Version,
+		PackageHash:               meta.Hash,
+		PackageURL:                meta.URL,
+		Emergency:                 emergency,
+		Published:                 published,
+		BlockedReason:             blockedReason,
+		RuntimeVersion:            currentProtectionRuleRuntimeVersion(),
+		RuleCount:                 len(after),
+		NewRules:                  countRuleDiff(diff, "new"),
+		RemovedRules:              countRuleDiff(diff, "removed"),
+		ModifiedRules:             countRuleDiff(diff, "modified"),
+		RollbackFromVersion:       rollbackFrom,
+		RolledBackToVersion:       rolledBackTo,
+		RollbackSnapshotVersion:   snapshotVersion,
+		EvaluationPassed:          evaluation.Passed,
+		EvaluationSummary:         evaluation.Summary,
+		AttackBlockRate:           evaluation.AttackBlockRate,
+		AttackBlockRateDelta:      evaluation.AttackBlockRateDelta,
+		BenignFalsePositives:      evaluation.BenignFalsePositives,
+		BenignFalsePositivesDelta: evaluation.BenignFalsePositivesDelta,
+		DiffJSON:                  marshalJSON(diff),
+		PublishedRulesJSON:        marshalJSON(after),
+		PrePublishRulesJSON:       marshalJSON(before),
+	}
+}
+
+func countRuleDiff(diff []ruleUpdateDiffItem, changeType string) int {
+	total := 0
+	for _, item := range diff {
+		if item.ChangeType == changeType {
+			total++
+		}
+	}
+	return total
+}
+
+func (s *Server) persistRuleUpdateLog(ctx context.Context, logModel database.ProtectionRuleUpdateLog) (ruleUpdateLogResponse, database.ProtectionRuleUpdateLog) {
+	_ = s.db.WithContext(ctx).Create(&logModel).Error
+	return s.ruleUpdateLogToAPI(logModel), logModel
+}
+
+func (s *Server) ruleUpdateLogToAPI(item database.ProtectionRuleUpdateLog) ruleUpdateLogResponse {
+	resp := ruleUpdateLogResponse{
+		ID:              fmt.Sprintf("%d", item.ID),
+		UpdateID:        item.UpdateID,
+		SourceID:        idString(item.SourceID),
+		SourceName:      item.SourceName,
+		Trigger:         item.Trigger,
+		Type:            item.Type,
+		Status:          item.Status,
+		Mode:            item.Mode,
+		PackageVersion:  item.PackageVersion,
+		PackageHash:     item.PackageHash,
+		PackageURL:      item.PackageURL,
+		RuntimeVersion:  item.RuntimeVersion,
+		Published:       item.Published,
+		Emergency:       item.Emergency,
+		EmergencyCVE:    item.EmergencyCVE,
+		RuleCount:       item.RuleCount,
+		NewRules:        item.NewRules,
+		RemovedRules:    item.RemovedRules,
+		ModifiedRules:   item.ModifiedRules,
+		BlockedReason:   item.BlockedReason,
+		ErrorMessage:    item.ErrorMessage,
+		RollbackFrom:    item.RollbackFromVersion,
+		RolledBackTo:    item.RolledBackToVersion,
+		SnapshotVersion: item.RollbackSnapshotVersion,
+		Evaluation: ruleUpdateEvaluationResponse{
+			Passed:                    item.EvaluationPassed,
+			Summary:                   item.EvaluationSummary,
+			BlockedReason:             item.BlockedReason,
+			AttackBlockRate:           item.AttackBlockRate,
+			AttackBlockRateDelta:      item.AttackBlockRateDelta,
+			BenignFalsePositives:      item.BenignFalsePositives,
+			BenignFalsePositivesDelta: item.BenignFalsePositivesDelta,
+		},
+		CreatedAt: formatMillis(item.CreatedAt),
+		UpdatedAt: formatMillis(item.UpdatedAt),
+	}
+	if strings.TrimSpace(item.DiffJSON) != "" {
+		_ = json.Unmarshal([]byte(item.DiffJSON), &resp.Diff)
+	}
+	if strings.TrimSpace(item.PublishedRulesJSON) != "" {
+		_ = json.Unmarshal([]byte(item.PublishedRulesJSON), &resp.PublishedRules)
+	}
+	return resp
+}
+
+func marshalJSON(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func formatRuleValidationErrors(errors []protectionRuleValidationError) string {
+	if len(errors) == 0 {
+		return "rule validation failed"
+	}
+	parts := make([]string, 0, len(errors))
+	for _, item := range errors {
+		parts = append(parts, strings.TrimSpace(strings.Join([]string{ternary(item.Line > 0, fmt.Sprintf("line %d", item.Line), ""), item.Field, item.Message}, " ")))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func ternary[T any](cond bool, yes, no T) T {
+	if cond {
+		return yes
+	}
+	return no
 }
 
 func (s *Server) ruleHitsByRuleID(ctx context.Context) map[int]int64 {

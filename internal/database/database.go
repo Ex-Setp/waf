@@ -40,7 +40,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateLegacySitesTable(db); err != nil {
 		return err
 	}
-	if err := db.AutoMigrate(&Site{}, &Certificate{}, &SemanticFingerprint{}, &AccessLog{}, &AttackLog{}, &AccessRule{}, &CCPolicy{}, &ProtectionRule{}, &ProtectionRulePublishSnapshot{}, &SiteProtectionPolicy{}, &PolicyVersion{}, &PolicyAudit{}, &AuditEvent{}); err != nil {
+	if err := db.AutoMigrate(&Site{}, &Certificate{}, &SemanticFingerprint{}, &AccessLog{}, &AttackLog{}, &AccessRule{}, &CCPolicy{}, &ProtectionRule{}, &ProtectionRulePublishSnapshot{}, &ProtectionRuleUpdateSource{}, &ProtectionRuleUpdateLog{}, &SiteProtectionPolicy{}, &PolicyVersion{}, &PolicyAudit{}, &AuditEvent{}); err != nil {
 		return err
 	}
 	return seedDefaultCCPolicies(db)

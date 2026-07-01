@@ -89,6 +89,121 @@ export interface SecurityCoverageSummary {
   falsePositiveLimit?: number
 }
 
+export interface ProtectionRuleUpdateEvaluation {
+  attackBlockRate?: number
+  benignFalsePositiveRate?: number
+  attackBlockRateDelta?: number
+  benignFalsePositiveRateDelta?: number
+  benignFalsePositives?: number
+  benignFalsePositivesDelta?: number
+}
+
+export interface ProtectionRuleUpdateDiff {
+  newRules?: number
+  removedRules?: number
+  modifiedRules?: number
+  added?: number
+  removed?: number
+  modified?: number
+}
+
+export interface ProtectionRuleUpdateSource {
+  id?: number | string
+  name: string
+  type: string
+  url?: string
+  mode?: string
+  enabled?: boolean
+  expectedHash?: string
+  currentVersion?: string
+  currentHash?: string
+  lastStatus?: string
+  lastError?: string
+  lastSuccessAt?: string | number
+  updatedAt?: string | number
+}
+
+export interface ProtectionRuleUpdateSourcePayload {
+  name: string
+  type: string
+  url?: string
+  mode: string
+  enabled?: boolean
+  expectedHash?: string
+}
+
+export interface ProtectionRuleUpdateResult {
+  id?: number | string
+  updateId?: number | string
+  version?: string
+  status?: string
+  published?: boolean
+  mode?: string
+  packageVersion?: string
+  packageHash?: string
+  evaluation?: ProtectionRuleUpdateEvaluation
+  diff?: ProtectionRuleUpdateDiff
+  newRules?: ProtectionRule[] | number
+  removedRules?: ProtectionRule[] | number
+  modifiedRules?: ProtectionRule[] | number
+  blockedReason?: string
+  errorMessage?: string
+  emergency?: boolean
+  emergencyCve?: string
+  runtimeVersion?: string
+  hotReload?: boolean
+  observeOnly?: boolean
+  grayMode?: boolean
+  createdAt?: string | number
+  publishedAt?: string | number
+}
+
+export interface ProtectionRuleUpdateLog extends ProtectionRuleUpdateResult {
+  time?: string | number
+}
+
+export interface ProtectionRuleUpdateSummary {
+  currentVersion?: string
+  currentHash?: string
+  currentRuleCount?: number
+  currentStatus?: string
+  lastPublishedAt?: string | number
+  lastBlockedReason?: string
+  lastFailureReason?: string
+  latest?: ProtectionRuleUpdateResult
+  sources?: ProtectionRuleUpdateSource[]
+  logs?: ProtectionRuleUpdateLog[]
+  runtimeVersion?: string
+  hotReload?: boolean
+}
+
+export interface ProtectionRuleUpdatePackagePayload {
+  type?: string
+  version?: string
+  hash?: string
+  mode?: string
+  rules?: ProtectionRulePayload[]
+}
+
+export interface ProtectionRuleUpdatePublishPayload {
+  expectedHash?: string
+  observeOnly?: boolean
+  grayMode?: boolean
+  package?: ProtectionRuleUpdatePackagePayload
+}
+
+export interface ProtectionRuleUpdateRollbackPayload {
+  updateId?: number | string
+  version?: string
+}
+
+export interface ProtectionRuleUpdateEmergencyPayload {
+  cve?: string
+  version?: string
+  observeOnly?: boolean
+  rule: ProtectionRulePayload
+}
+
 export interface ProtectionRule {
   id: number | string
   ruleId?: string | number
@@ -379,6 +494,31 @@ export async function reloadCRS(): Promise<CRSStatus> {
 
 export async function fetchSecurityCoverage(): Promise<SecurityCoverageSummary> {
   const { data } = await http.get<SecurityCoverageSummary>('/protection/security-coverage')
+  return data
+}
+
+export async function fetchProtectionRuleUpdates(): Promise<ProtectionRuleUpdateSummary> {
+  const { data } = await http.get<ProtectionRuleUpdateSummary>('/protection/rule-updates')
+  return data
+}
+
+export async function saveProtectionRuleUpdateSource(payload: ProtectionRuleUpdateSourcePayload): Promise<ProtectionRuleUpdateSource> {
+  const { data } = await http.post<ProtectionRuleUpdateSource>('/protection/rule-updates/sources', payload)
+  return data
+}
+
+export async function publishProtectionRuleUpdate(payload: ProtectionRuleUpdatePublishPayload): Promise<ProtectionRuleUpdateResult> {
+  const { data } = await http.post<ProtectionRuleUpdateResult>('/protection/rule-updates/publish', payload)
+  return data
+}
+
+export async function rollbackProtectionRuleUpdate(payload?: ProtectionRuleUpdateRollbackPayload): Promise<ProtectionRuleUpdateResult> {
+  const { data } = await http.post<ProtectionRuleUpdateResult>('/protection/rule-updates/rollback', payload ?? {})
+  return data
+}
+
+export async function createEmergencyProtectionRuleUpdate(payload: ProtectionRuleUpdateEmergencyPayload): Promise<ProtectionRuleUpdateResult> {
+  const { data } = await http.post<ProtectionRuleUpdateResult>('/protection/rule-updates/emergency', payload)
   return data
 }
 

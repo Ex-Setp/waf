@@ -285,6 +285,62 @@ type ProtectionRulePublishSnapshot struct {
 	CreatedAt      int64  `gorm:"autoCreateTime:milli;index" json:"createdAt"`
 }
 
+type ProtectionRuleUpdateSource struct {
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	Name           string `gorm:"size:128;not null" json:"name"`
+	Type           string `gorm:"size:64;index;not null" json:"type"`
+	URL            string `gorm:"size:1024" json:"url"`
+	Mode           string `gorm:"size:32;index;not null;default:block" json:"mode"`
+	Enabled        bool   `gorm:"not null;default:true" json:"enabled"`
+	ExpectedHash   string `gorm:"size:128" json:"expectedHash"`
+	CurrentVersion string `gorm:"size:128" json:"currentVersion"`
+	CurrentHash    string `gorm:"size:128" json:"currentHash"`
+	LastStatus     string `gorm:"size:32;index" json:"lastStatus"`
+	LastError      string `gorm:"type:text" json:"lastError"`
+	LastSuccessAt  int64  `gorm:"index" json:"lastSuccessAt"`
+	CreatedAt      int64  `gorm:"autoCreateTime:milli" json:"createdAt"`
+	UpdatedAt      int64  `gorm:"autoUpdateTime:milli" json:"updatedAt"`
+}
+
+type ProtectionRuleUpdateLog struct {
+	ID                        uint    `gorm:"primaryKey" json:"id"`
+	UpdateID                  string  `gorm:"size:64;uniqueIndex;not null" json:"updateId"`
+	SourceID                  uint    `gorm:"index" json:"sourceId"`
+	SourceName                string  `gorm:"size:128" json:"sourceName"`
+	Trigger                   string  `gorm:"size:32;index;not null" json:"trigger"`
+	Type                      string  `gorm:"size:64;index;not null" json:"type"`
+	Status                    string  `gorm:"size:32;index;not null" json:"status"`
+	Mode                      string  `gorm:"size:32;index;not null;default:block" json:"mode"`
+	PackageVersion            string  `gorm:"size:128;index" json:"packageVersion"`
+	PackageHash               string  `gorm:"size:128;index" json:"packageHash"`
+	PackageURL                string  `gorm:"size:1024" json:"packageUrl"`
+	Emergency                 bool    `gorm:"not null;default:false" json:"emergency"`
+	EmergencyCVE              string  `gorm:"size:128;index" json:"emergencyCve"`
+	Published                 bool    `gorm:"not null;default:false" json:"published"`
+	BlockedReason             string  `gorm:"type:text" json:"blockedReason"`
+	ErrorMessage              string  `gorm:"type:text" json:"errorMessage"`
+	RuntimeVersion            string  `gorm:"size:128" json:"runtimeVersion"`
+	RuleCount                 int     `gorm:"not null;default:0" json:"ruleCount"`
+	NewRules                  int     `gorm:"not null;default:0" json:"newRules"`
+	RemovedRules              int     `gorm:"not null;default:0" json:"removedRules"`
+	ModifiedRules             int     `gorm:"not null;default:0" json:"modifiedRules"`
+	RollbackFromVersion       string  `gorm:"size:128" json:"rollbackFromVersion"`
+	RolledBackToVersion       string  `gorm:"size:128" json:"rolledBackToVersion"`
+	RollbackSnapshotVersion   string  `gorm:"size:128" json:"rollbackSnapshotVersion"`
+	EvaluationPassed          bool    `gorm:"not null;default:false" json:"evaluationPassed"`
+	EvaluationSummary         string  `gorm:"type:text" json:"evaluationSummary"`
+	AttackBlockRate           float64 `gorm:"not null;default:0" json:"attackBlockRate"`
+	AttackBlockRateDelta      float64 `gorm:"not null;default:0" json:"attackBlockRateDelta"`
+	BenignFalsePositives      int     `gorm:"not null;default:0" json:"benignFalsePositives"`
+	BenignFalsePositivesDelta int     `gorm:"not null;default:0" json:"benignFalsePositivesDelta"`
+	PackageJSON               string  `gorm:"type:text" json:"packageJson"`
+	DiffJSON                  string  `gorm:"type:text" json:"diffJson"`
+	PublishedRulesJSON        string  `gorm:"type:text" json:"publishedRulesJson"`
+	PrePublishRulesJSON       string  `gorm:"type:text" json:"prePublishRulesJson"`
+	CreatedAt                 int64   `gorm:"autoCreateTime:milli;index" json:"createdAt"`
+	UpdatedAt                 int64   `gorm:"autoUpdateTime:milli" json:"updatedAt"`
+}
+
 type SiteProtectionPolicy struct {
 	ID                    uint   `gorm:"primaryKey" json:"id"`
 	SiteID                uint   `gorm:"uniqueIndex;not null" json:"siteId"`

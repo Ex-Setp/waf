@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { Refresh, Search } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  createEmergencyProtectionRuleUpdate,
   createProtectionRule,
   createProtectionWhitelist,
   deleteProtectionRule,
@@ -14,6 +16,7 @@ import {
   fetchProtectionAttackEvents,
   fetchProtectionRules,
   fetchProtectionRuleSets,
+  fetchProtectionRuleUpdates,
   fetchSecurityCoverage,
   fetchProtectionSemanticFingerprints,
   fetchProtectionWhitelists,
@@ -27,9 +30,11 @@ import {
   fetchTrafficTopIP,
   fetchTrafficTopPath,
   fetchTrafficTrend,
+  publishProtectionRuleUpdate,
   previewRequestParser,
   publishSiteProtectionPolicy,
   reloadCRS,
+  rollbackProtectionRuleUpdate,
   rollbackProtectionRules,
   rollbackSiteProtectionPolicy,
   setProtectionRuleEnabled,
@@ -43,6 +48,8 @@ import {
   type ProtectionRule,
   type ProtectionRulePayload,
   type ProtectionRuleSet,
+  type ProtectionRuleUpdateResult,
+  type ProtectionRuleUpdateSummary,
   type ProtectionRuleValidationError,
   type ProtectionWhitelist,
   type ProtectionWhitelistPayload,
@@ -108,6 +115,36 @@ const ruleRollingBack = ref(false)
 const ruleError = ref('')
 const ruleRuntimeVersion = ref('')
 const ruleHotReload = ref(false)
+const ruleUpdateSummary = reactive<{ loading: boolean; operating: boolean; error: string; data: ProtectionRuleUpdateSummary | null }>({ loading: false, operating: false, error: '', data: null })
+const ruleUpdateResult = ref<ProtectionRuleUpdateResult | null>(null)
+const ruleUpdateRollbackForm = reactive<{ updateId: string; version: string }>({ updateId: '', version: '' })
+const ruleUpdatePublishForm = reactive({
+  expectedHash: '',
+  observeOnly: false,
+  grayMode: false,
+  packageType: '',
+  packageVersion: '',
+  packageHash: '',
+  packageMode: '',
+  packageRules: '',
+})
+const emergencyUpdateForm = reactive({
+  cve: '',
+  version: '',
+  observeOnly: true,
+  ruleId: 0,
+  name: '',
+  description: '',
+  category: 'emergency',
+  variable: 'REQUEST_URI',
+  operator: '@contains',
+  pattern: '',
+  severity: 'critical',
+  score: 10,
+  action: 'deny',
+  source: 'emergency',
+  enabled: true,
+})
 const editingRuleId = ref<number | string | null>(null)
 const ruleForm = reactive<ProtectionRulePayload>({
   ruleId: 0,
@@ -195,12 +232,26 @@ async function loadRules(): Promise<void> {
   await Promise.all([
     loadCRSStatus(),
     loadSecurityCoverage(),
+    loadRuleUpdates(),
     loadState(ruleSets, fetchProtectionRuleSets),
     loadState(rules, () => loadedRulesPromise),
   ])
   const loadedRules = await loadedRulesPromise
   ruleRuntimeVersion.value = String((loadedRules as { items: ProtectionRule[]; total: number; runtimeVersion?: string }).runtimeVersion || '')
   ruleHotReload.value = rules.items.some((item) => item.hotReload === true)
+}
+
+async function loadRuleUpdates(): Promise<void> {
+  ruleUpdateSummary.loading = true
+  ruleUpdateSummary.error = ''
+  try {
+    ruleUpdateSummary.data = await fetchProtectionRuleUpdates()
+  } catch (error) {
+    ruleUpdateSummary.data = null
+    ruleUpdateSummary.error = errorMessage(error)
+  } finally {
+    ruleUpdateSummary.loading = false
+  }
 }
 
 async function loadCRSStatus(): Promise<void> {
@@ -469,6 +520,134 @@ async function rollbackRules(): Promise<void> {
   }
 }
 
+function parseRulePayloadList(raw: string): ProtectionRulePayload[] | undefined {
+  const text = raw.trim()
+  if (!text) return undefined
+  const parsed = JSON.parse(text) as unknown
+  if (!Array.isArray(parsed)) {
+    throw new Error('package.rules 必须是 JSON 数组')
+  }
+  return parsed as ProtectionRulePayload[]
+}
+
+function buildPublishRuleUpdatePayload(): {
+  expectedHash?: string
+  observeOnly?: boolean
+  grayMode?: boolean
+  package?: {
+    type?: string
+    version?: string
+    hash?: string
+    mode?: string
+    rules?: ProtectionRulePayload[]
+  }
+} {
+  const payload: {
+    expectedHash?: string
+    observeOnly?: boolean
+    grayMode?: boolean
+    package?: {
+      type?: string
+      version?: string
+      hash?: string
+      mode?: string
+      rules?: ProtectionRulePayload[]
+    }
+  } = {}
+  if (ruleUpdatePublishForm.expectedHash.trim()) payload.expectedHash = ruleUpdatePublishForm.expectedHash.trim()
+  if (ruleUpdatePublishForm.observeOnly) payload.observeOnly = true
+  if (ruleUpdatePublishForm.grayMode) payload.grayMode = true
+
+  const pkgRules = parseRulePayloadList(ruleUpdatePublishForm.packageRules)
+  const hasPackage =
+    ruleUpdatePublishForm.packageType.trim() ||
+    ruleUpdatePublishForm.packageVersion.trim() ||
+    ruleUpdatePublishForm.packageHash.trim() ||
+    ruleUpdatePublishForm.packageMode.trim() ||
+    pkgRules?.length
+  if (hasPackage) {
+    payload.package = {}
+    if (ruleUpdatePublishForm.packageType.trim()) payload.package.type = ruleUpdatePublishForm.packageType.trim()
+    if (ruleUpdatePublishForm.packageVersion.trim()) payload.package.version = ruleUpdatePublishForm.packageVersion.trim()
+    if (ruleUpdatePublishForm.packageHash.trim()) payload.package.hash = ruleUpdatePublishForm.packageHash.trim()
+    if (ruleUpdatePublishForm.packageMode.trim()) payload.package.mode = ruleUpdatePublishForm.packageMode.trim()
+    if (pkgRules?.length) payload.package.rules = pkgRules
+  }
+  return payload
+}
+
+async function submitRuleUpdatePublish(): Promise<void> {
+  ruleUpdateSummary.operating = true
+  ruleUpdateSummary.error = ''
+  try {
+    ruleUpdateResult.value = await publishProtectionRuleUpdate(buildPublishRuleUpdatePayload())
+    ElMessage.success('规则更新请求已提交')
+    await loadRules()
+  } catch (error) {
+    ruleUpdateSummary.error = errorMessage(error)
+  } finally {
+    ruleUpdateSummary.operating = false
+  }
+}
+
+async function submitRuleUpdateRollback(): Promise<void> {
+  ruleUpdateSummary.operating = true
+  ruleUpdateSummary.error = ''
+  try {
+    const payload: { updateId?: string; version?: string } = {}
+    if (ruleUpdateRollbackForm.updateId.trim()) payload.updateId = ruleUpdateRollbackForm.updateId.trim()
+    if (ruleUpdateRollbackForm.version.trim()) payload.version = ruleUpdateRollbackForm.version.trim()
+    ruleUpdateResult.value = await rollbackProtectionRuleUpdate(Object.keys(payload).length ? payload : undefined)
+    ElMessage.success('规则版本已回滚')
+    await loadRules()
+  } catch (error) {
+    ruleUpdateSummary.error = errorMessage(error)
+  } finally {
+    ruleUpdateSummary.operating = false
+  }
+}
+
+async function submitEmergencyRuleUpdate(): Promise<void> {
+  ruleUpdateSummary.operating = true
+  ruleUpdateSummary.error = ''
+  try {
+    const rulePayload: ProtectionRulePayload = {
+      ruleId: Number(emergencyUpdateForm.ruleId),
+      name: emergencyUpdateForm.name.trim(),
+      category: emergencyUpdateForm.category.trim() || 'emergency',
+      variable: emergencyUpdateForm.variable.trim(),
+      operator: emergencyUpdateForm.operator.trim(),
+      pattern: emergencyUpdateForm.pattern,
+      severity: emergencyUpdateForm.severity.trim(),
+      score: Number(emergencyUpdateForm.score),
+      action: emergencyUpdateForm.action.trim(),
+      source: emergencyUpdateForm.source.trim() || 'emergency',
+      enabled: emergencyUpdateForm.enabled,
+    }
+    if (emergencyUpdateForm.description.trim()) {
+      rulePayload.description = emergencyUpdateForm.description.trim()
+    }
+    const emergencyPayload: {
+      cve?: string
+      version?: string
+      observeOnly: boolean
+      rule: ProtectionRulePayload
+    } = {
+      observeOnly: emergencyUpdateForm.observeOnly,
+      rule: rulePayload,
+    }
+    if (emergencyUpdateForm.cve.trim()) emergencyPayload.cve = emergencyUpdateForm.cve.trim()
+    if (emergencyUpdateForm.version.trim()) emergencyPayload.version = emergencyUpdateForm.version.trim()
+    ruleUpdateResult.value = await createEmergencyProtectionRuleUpdate(emergencyPayload)
+    ElMessage.success('紧急规则已提交')
+    await loadRules()
+  } catch (error) {
+    ruleUpdateSummary.error = errorMessage(error)
+  } finally {
+    ruleUpdateSummary.operating = false
+  }
+}
+
 function openRuleImport(): void {
   ruleImportInput.value?.click()
 }
@@ -593,6 +772,29 @@ function percent(value?: number): string {
   return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '--'
 }
 
+function signedPercent(value?: number): string {
+  if (typeof value !== 'number') return '--'
+  return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`
+}
+
+function displayCount(value?: number): string {
+  return typeof value === 'number' ? String(value) : '--'
+}
+
+function updateStatusTag(status?: string): 'success' | 'warning' | 'danger' | 'info' {
+  const normalized = String(status || '').toLowerCase()
+  if (['published', 'success', 'ready', 'active'].includes(normalized)) return 'success'
+  if (['blocked', 'failed', 'error'].includes(normalized)) return 'danger'
+  if (['pending', 'publishing', 'gray', 'observe'].includes(normalized)) return 'warning'
+  return 'info'
+}
+
+function updateDiffCount(value: number | ProtectionRule[] | undefined): string {
+  if (typeof value === 'number') return String(value)
+  if (Array.isArray(value)) return String(value.length)
+  return '--'
+}
+
 function rankLabel(row: TrafficRankItem): string {
   return String(row.name || row.key || '')
 }
@@ -673,6 +875,108 @@ onMounted(() => {
     </div>
 
     <div v-show="activeTab === 'rules'" class="page-stack">
+      <div class="sl-card protection-panel" v-loading="ruleUpdateSummary.loading">
+        <div class="sl-card-head">
+          <span class="sl-card-title">规则 / 情报更新</span>
+          <div class="protection-actions">
+            <span class="page-hint">运行版本 {{ ruleUpdateSummary.data?.runtimeVersion || '--' }} / 热更新 {{ ruleUpdateSummary.data?.hotReload ? 'ok' : 'off' }}</span>
+            <el-button :icon="Refresh" @click="loadRuleUpdates">刷新</el-button>
+          </div>
+        </div>
+        <el-alert v-if="ruleUpdateSummary.error" type="error" :title="ruleUpdateSummary.error" show-icon :closable="false" />
+        <template v-else-if="ruleUpdateSummary.data">
+          <div class="dashboard-metric-grid">
+            <el-card class="metric-card"><div class="metric-card__label">当前版本</div><div class="metric-card__value is-primary">{{ ruleUpdateSummary.data.currentVersion || '--' }}</div><div class="metric-card__trend">Hash {{ ruleUpdateSummary.data.currentHash || '--' }}</div></el-card>
+            <el-card class="metric-card"><div class="metric-card__label">状态 / 规则数</div><div class="metric-card__value" :class="updateStatusTag(ruleUpdateSummary.data.currentStatus) === 'danger' ? 'is-danger' : 'is-success'">{{ ruleUpdateSummary.data.currentStatus || '--' }}</div><div class="metric-card__trend">规则 {{ displayCount(ruleUpdateSummary.data.currentRuleCount) }}</div></el-card>
+            <el-card class="metric-card"><div class="metric-card__label">最近发布</div><div class="metric-card__value is-success">{{ formatDate(ruleUpdateSummary.data.lastPublishedAt) }}</div><div class="metric-card__trend">包版本 {{ ruleUpdateSummary.data.latest?.packageVersion || '--' }}</div></el-card>
+            <el-card class="metric-card"><div class="metric-card__label">最新差异</div><div class="metric-card__value is-warning">{{ displayCount(ruleUpdateSummary.data.latest?.diff?.newRules ?? ruleUpdateSummary.data.latest?.diff?.added) }}/{{ displayCount(ruleUpdateSummary.data.latest?.diff?.removedRules ?? ruleUpdateSummary.data.latest?.diff?.removed) }}/{{ displayCount(ruleUpdateSummary.data.latest?.diff?.modifiedRules ?? ruleUpdateSummary.data.latest?.diff?.modified) }}</div><div class="metric-card__trend">新增 / 删除 / 修改</div></el-card>
+          </div>
+          <el-alert v-if="ruleUpdateSummary.data.lastBlockedReason || ruleUpdateSummary.data.lastFailureReason" type="warning" :closable="false" show-icon>
+            <template #title>{{ ruleUpdateSummary.data.lastBlockedReason || ruleUpdateSummary.data.lastFailureReason }}</template>
+          </el-alert>
+          <div class="traffic-grid">
+            <div class="sl-card protection-panel">
+              <div class="sl-card-head"><span class="sl-card-title">评估与来源</span><el-button link type="primary" @click="openDetail('规则更新摘要', ruleUpdateSummary.data)">详情</el-button></div>
+              <div class="compact-info-grid">
+                <div class="compact-info-item"><span>攻击拦截率</span><strong>{{ percent(ruleUpdateSummary.data.latest?.evaluation?.attackBlockRate) }}</strong><small>Δ {{ signedPercent(ruleUpdateSummary.data.latest?.evaluation?.attackBlockRateDelta) }}</small></div>
+                <div class="compact-info-item"><span>良性误报率</span><strong>{{ percent(ruleUpdateSummary.data.latest?.evaluation?.benignFalsePositiveRate) }}</strong><small>Δ {{ signedPercent(ruleUpdateSummary.data.latest?.evaluation?.benignFalsePositiveRateDelta) }}</small></div>
+                <div class="compact-info-item"><span>最新状态</span><strong><el-tag size="small" :type="updateStatusTag(ruleUpdateSummary.data.latest?.status)">{{ ruleUpdateSummary.data.latest?.status || '--' }}</el-tag></strong><small>{{ ruleUpdateSummary.data.latest?.mode || '--' }}</small></div>
+                <div class="compact-info-item"><span>紧急规则</span><strong>{{ ruleUpdateSummary.data.latest?.emergency ? '是' : '否' }}</strong><small>{{ ruleUpdateSummary.data.latest?.emergencyCve || '--' }}</small></div>
+              </div>
+              <el-empty v-if="!(ruleUpdateSummary.data.sources?.length)" description="暂无更新来源数据" />
+              <el-table v-else :data="ruleUpdateSummary.data.sources || []" size="small" empty-text="暂无更新来源数据">
+                <el-table-column prop="name" label="来源" min-width="140" />
+                <el-table-column prop="type" label="类型" width="100" />
+                <el-table-column prop="currentVersion" label="当前版本" width="130" />
+                <el-table-column prop="currentHash" label="当前 Hash" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="lastStatus" label="最近状态" width="100" />
+                <el-table-column prop="lastError" label="最近错误" min-width="180" show-overflow-tooltip />
+                <el-table-column label="最近成功" width="170">
+                  <template #default="{ row }: { row: { lastSuccessAt?: string | number } }">{{ formatDate(row.lastSuccessAt) }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
+            <div class="sl-card protection-panel">
+              <div class="sl-card-head"><span class="sl-card-title">最近更新日志</span><span class="page-hint">新增 {{ updateDiffCount(ruleUpdateSummary.data.latest?.newRules) }} / 删除 {{ updateDiffCount(ruleUpdateSummary.data.latest?.removedRules) }} / 修改 {{ updateDiffCount(ruleUpdateSummary.data.latest?.modifiedRules) }}</span></div>
+              <el-empty v-if="!(ruleUpdateSummary.data.logs?.length)" description="暂无规则更新日志" />
+              <el-table v-else :data="ruleUpdateSummary.data.logs || []" size="small" empty-text="暂无规则更新日志">
+                <el-table-column label="时间" width="170"><template #default="{ row }: { row: ProtectionRuleUpdateResult & { time?: string | number } }">{{ formatDate(row.time || row.publishedAt || row.createdAt) }}</template></el-table-column>
+                <el-table-column prop="status" label="状态" width="100"><template #default="{ row }: { row: ProtectionRuleUpdateResult }"><el-tag size="small" :type="updateStatusTag(row.status)">{{ row.status || '--' }}</el-tag></template></el-table-column>
+                <el-table-column prop="packageVersion" label="包版本" width="130" />
+                <el-table-column prop="packageHash" label="Hash" min-width="150" show-overflow-tooltip />
+                <el-table-column label="原因" min-width="180" show-overflow-tooltip><template #default="{ row }: { row: ProtectionRuleUpdateResult }">{{ row.blockedReason || row.errorMessage || '--' }}</template></el-table-column>
+              </el-table>
+            </div>
+          </div>
+          <div class="traffic-grid">
+            <div class="sl-card protection-panel">
+              <div class="sl-card-head"><span class="sl-card-title">回滚</span><span class="page-hint">留空则按后端默认策略回滚</span></div>
+              <el-form label-width="86px" size="small" class="rule-form compact-form">
+                <el-form-item label="updateId"><el-input v-model="ruleUpdateRollbackForm.updateId" clearable placeholder="可选" /></el-form-item>
+                <el-form-item label="version"><el-input v-model="ruleUpdateRollbackForm.version" clearable placeholder="可选" /></el-form-item>
+                <el-form-item><el-button type="warning" :loading="ruleUpdateSummary.operating" @click="submitRuleUpdateRollback">执行回滚</el-button></el-form-item>
+              </el-form>
+            </div>
+            <div class="sl-card protection-panel">
+              <div class="sl-card-head"><span class="sl-card-title">手动更新</span><span class="page-hint">支持 expectedHash / observeOnly / grayMode / package</span></div>
+              <el-form label-width="98px" size="small" class="rule-form compact-form">
+                <el-form-item label="expectedHash"><el-input v-model="ruleUpdatePublishForm.expectedHash" clearable placeholder="可选" /></el-form-item>
+                <el-form-item label="发布选项"><div class="rule-inline"><el-switch v-model="ruleUpdatePublishForm.observeOnly" active-text="仅观察" /><el-switch v-model="ruleUpdatePublishForm.grayMode" active-text="灰度" /></div></el-form-item>
+                <el-form-item label="package.type"><el-input v-model="ruleUpdatePublishForm.packageType" clearable placeholder="intel/manual/crs" /></el-form-item>
+                <el-form-item label="package.version"><el-input v-model="ruleUpdatePublishForm.packageVersion" clearable /></el-form-item>
+                <el-form-item label="package.hash"><el-input v-model="ruleUpdatePublishForm.packageHash" clearable /></el-form-item>
+                <el-form-item label="package.mode"><el-input v-model="ruleUpdatePublishForm.packageMode" clearable placeholder="observe/gray/enforce" /></el-form-item>
+                <el-form-item label="package.rules"><el-input v-model="ruleUpdatePublishForm.packageRules" type="textarea" :rows="4" placeholder='可选 JSON 数组，例如 [{"ruleId":155001,"name":"temp","category":"custom","variable":"ARGS","operator":"@contains","pattern":"x","severity":"high","score":8,"action":"deny","source":"manual","enabled":true}]' /></el-form-item>
+                <el-form-item><el-button type="primary" :loading="ruleUpdateSummary.operating" @click="submitRuleUpdatePublish">发布更新</el-button></el-form-item>
+              </el-form>
+            </div>
+          </div>
+          <div class="sl-card protection-panel">
+            <div class="sl-card-head"><span class="sl-card-title">紧急 CVE 临时规则</span><span class="page-hint">{{ ruleUpdateSummary.data.latest?.emergencyCve ? `最近紧急标记 ${ruleUpdateSummary.data.latest?.emergencyCve}` : '未发现最近紧急标记' }}</span></div>
+            <el-form label-width="90px" size="small" class="rule-form compact-form">
+              <div class="compact-form-grid">
+                <el-form-item label="CVE"><el-input v-model="emergencyUpdateForm.cve" clearable placeholder="CVE-2026-xxxx" /></el-form-item>
+                <el-form-item label="版本"><el-input v-model="emergencyUpdateForm.version" clearable placeholder="可选" /></el-form-item>
+                <el-form-item label="Rule ID"><el-input-number v-model="emergencyUpdateForm.ruleId" :min="1" :step="1" /></el-form-item>
+                <el-form-item label="名称"><el-input v-model="emergencyUpdateForm.name" placeholder="Emergency CVE block" /></el-form-item>
+                <el-form-item label="变量"><el-input v-model="emergencyUpdateForm.variable" /></el-form-item>
+                <el-form-item label="操作符"><el-input v-model="emergencyUpdateForm.operator" /></el-form-item>
+                <el-form-item label="Pattern"><el-input v-model="emergencyUpdateForm.pattern" /></el-form-item>
+                <el-form-item label="动作"><el-select v-model="emergencyUpdateForm.action"><el-option label="deny" value="deny" /><el-option label="log" value="log" /><el-option label="pass" value="pass" /></el-select></el-form-item>
+                <el-form-item label="观察"><el-switch v-model="emergencyUpdateForm.observeOnly" active-text="仅观察" /></el-form-item>
+              </div>
+              <el-form-item label="描述"><el-input v-model="emergencyUpdateForm.description" type="textarea" :rows="2" /></el-form-item>
+              <el-form-item><el-button type="danger" :loading="ruleUpdateSummary.operating" @click="submitEmergencyRuleUpdate">下发紧急规则</el-button></el-form-item>
+            </el-form>
+          </div>
+          <el-alert v-if="ruleUpdateResult" type="success" :closable="false" show-icon>
+            <template #title>{{ `结果: ${ruleUpdateResult.status || '--'} / 发布 ${ruleUpdateResult.published ? 'yes' : 'no'} / 版本 ${ruleUpdateResult.packageVersion || ruleUpdateResult.version || '--'}` }}</template>
+            <template #default>{{ ruleUpdateResult.blockedReason || ruleUpdateResult.errorMessage || `Diff ${updateDiffCount(ruleUpdateResult.newRules)} / ${updateDiffCount(ruleUpdateResult.removedRules)} / ${updateDiffCount(ruleUpdateResult.modifiedRules)}` }}</template>
+          </el-alert>
+        </template>
+        <el-empty v-else description="未获取到规则更新摘要" />
+      </div>
+
       <div class="sl-card protection-panel" v-loading="crsStatus.loading">
         <div class="sl-card-head">
           <span class="sl-card-title">OWASP CRS / Coraza 状态</span>

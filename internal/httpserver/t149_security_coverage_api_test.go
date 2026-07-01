@@ -17,12 +17,16 @@ func TestT149SecurityCoverageAPI(t *testing.T) {
 		t.Fatalf("GET /api/protection/security-coverage returned %d: %s", recorder.Code, recorder.Body.String())
 	}
 	var payload struct {
-		AttackTotal           int     `json:"attackTotal"`
-		AttackBlocked         int     `json:"attackBlocked"`
-		AttackBlockRate       float64 `json:"attackBlockRate"`
-		BenignFalsePositives  int     `json:"benignFalsePositives"`
-		AttackBlockRateTarget float64 `json:"attackBlockRateTarget"`
-		FalsePositiveLimit    int     `json:"falsePositiveLimit"`
+		RuleVersion           string   `json:"ruleVersion"`
+		AttackTotal           int      `json:"attackTotal"`
+		AttackBlocked         int      `json:"attackBlocked"`
+		AttackBlockRate       float64  `json:"attackBlockRate"`
+		BenignFalsePositives  int      `json:"benignFalsePositives"`
+		AttackBlockRateTarget float64  `json:"attackBlockRateTarget"`
+		FalsePositiveLimit    int      `json:"falsePositiveLimit"`
+		GatePassed            bool     `json:"gatePassed"`
+		HasBaseline           bool     `json:"hasBaseline"`
+		GateFailures          []string `json:"gateFailures"`
 	}
 	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -32,5 +36,11 @@ func TestT149SecurityCoverageAPI(t *testing.T) {
 	}
 	if payload.AttackBlockRateTarget != 0.90 || payload.FalsePositiveLimit != 3 {
 		t.Fatalf("unexpected coverage gates: %+v", payload)
+	}
+	if payload.RuleVersion == "" {
+		t.Fatalf("expected rule version in payload: %+v", payload)
+	}
+	if !payload.GatePassed {
+		t.Fatalf("expected current curated gate to pass: %+v", payload)
 	}
 }

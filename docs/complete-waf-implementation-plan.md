@@ -2931,7 +2931,7 @@ cd web && npm run build
 
 **下一任务：** T156：安全覆盖率报告与持续回归门禁。
 
-#### T156：安全覆盖率报告与持续回归门禁
+#### T156：安全覆盖率报告与持续回归门禁（已完成）
 
 **目标：** 把“能防住 90% 常见攻击”变成 CI/本地都可验证的门禁，而不是口头承诺。
 
@@ -2950,10 +2950,34 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] 一条命令生成覆盖率报告。
-- [ ] 报告中清楚展示总体阻断率、分类阻断率、误报率和规则版本。
-- [ ] 覆盖率退化会导致测试失败。
-- [ ] 前端展示报告摘要，不使用静态假数据。
+- [x] 一条命令生成覆盖率报告。
+- [x] 报告中清楚展示总体阻断率、分类阻断率、误报率和规则版本。
+- [x] 覆盖率退化会导致测试失败。
+- [x] 前端展示报告摘要，不使用静态假数据。
+
+**完成记录（2026-07-01）：**
+
+- `cmd/aegis-securityeval` 扩展为本地/CI 覆盖率门禁命令：保留 `-out docs/security-coverage-report.md`，新增 `-baseline`、`-write-baseline`、`-max-block-rate-drop`、`-max-fp-increase`、`-format markdown|json`，支持生成 Markdown 报告、JSON baseline 和基线对比失败退出。
+- `internal/securityeval` 新增 baseline JSON 读写、`CompareResults`、`ValidateWithBaseline`、分类 delta、Gate Failures、Top Missed Attack Samples、Top False Positives；绝对门禁仍保持攻击阻断率 `>=90%`、良性误报 `<=3`，baseline 默认不允许阻断率下降或误报样本增加。
+- 新增 `docs/security-coverage-baseline.json` 作为当前安全覆盖率基线；`docs/security-coverage-report.md` 通过 baseline 对比刷新，当前 SecRule 572、Attack block rate 95.89% (70/73)、Benign false positives 0/67，baseline delta 均为 0。
+- `/api/protection/security-coverage` 返回真实门禁状态、规则版本、baseline 信息、阻断率/误报 delta 和失败原因；继续使用 `internal/securityeval` 实时评测，不回退假数据。
+- T155 规则更新评测复用 `securityeval.CompareResults`，规则/情报包发布与持续覆盖率门禁语义一致，并补齐前端已展示的误报率 delta 字段。
+- 前端 `ProtectionConfigView.vue` 的“安全覆盖率”卡片展示真实 API 返回的 gate 状态、baseline、规则版本/数量、Top missed、Top false positive、阻断率 delta 和误报 delta；API 失败显示错误态，不使用静态/mock fallback。
+- 新增/更新测试：`internal/securityeval/securityeval_test.go` 覆盖 baseline round-trip、直接 Result JSON、可配置退化阈值、报告必含字段；`internal/httpserver/t149_security_coverage_api_test.go` 覆盖 API gate/baseline 字段。
+
+**验证命令（已通过）：**
+
+- `gofmt -w cmd/aegis-securityeval/main.go internal/securityeval/securityeval.go internal/httpserver/console_api.go internal/httpserver/t149_security_coverage_api_test.go internal/securityeval/securityeval_test.go`
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go run ./cmd/aegis-securityeval -out docs/security-coverage-report.md -write-baseline docs/security-coverage-baseline.json`
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go run ./cmd/aegis-securityeval -baseline docs/security-coverage-baseline.json -out docs/security-coverage-report.md`
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/securityeval ./internal/httpserver -run 'TestT156|TestT149|TestT155' -count=1`
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/database ./internal/httpserver ./internal/securityeval -count=1`
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./internal/detection ./internal/requestparser ./internal/pipeline ./internal/httpserver ./internal/securityeval -count=1`
+- `GOPROXY=https://goproxy.cn,direct GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache" GOPATH="$PWD/.gopath" go test ./... -count=1`
+- `cd web && npm run build`
+- `git diff --check`
+
+**下一任务：** T157：前端防护中心 1:1 产品化完善。
 
 #### T157：前端防护中心 1:1 产品化完善
 

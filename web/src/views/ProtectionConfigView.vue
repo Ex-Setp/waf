@@ -781,6 +781,18 @@ function displayCount(value?: number): string {
   return typeof value === 'number' ? String(value) : '--'
 }
 
+function gateTagType(passed?: boolean): 'success' | 'danger' | 'info' {
+  if (passed === true) return 'success'
+  if (passed === false) return 'danger'
+  return 'info'
+}
+
+function gateMetricClass(passed?: boolean): 'is-success' | 'is-danger' | 'is-primary' {
+  if (passed === true) return 'is-success'
+  if (passed === false) return 'is-danger'
+  return 'is-primary'
+}
+
 function updateStatusTag(status?: string): 'success' | 'warning' | 'danger' | 'info' {
   const normalized = String(status || '').toLowerCase()
   if (['published', 'success', 'ready', 'active'].includes(normalized)) return 'success'
@@ -993,14 +1005,33 @@ onMounted(() => {
       <div class="sl-card protection-panel" v-loading="securityCoverage.loading">
         <div class="sl-card-head">
           <span class="sl-card-title">安全覆盖率</span>
-          <span class="page-hint">来自 /api/protection/security-coverage</span>
+          <div class="protection-actions">
+            <el-tag size="small" :type="gateTagType(securityCoverage.data.gatePassed)">
+              {{ securityCoverage.data.gatePassed === false ? '门禁失败' : '门禁通过' }}
+            </el-tag>
+            <span class="page-hint">来自 /api/protection/security-coverage</span>
+          </div>
         </div>
         <el-alert v-if="securityCoverage.error" type="error" :title="securityCoverage.error" show-icon :closable="false" />
+        <el-alert
+          v-else-if="securityCoverage.data.gatePassed === false"
+          type="warning"
+          :title="securityCoverage.data.gateFailures?.[0] || '安全覆盖率门禁失败'"
+          :description="(securityCoverage.data.gateFailures || []).slice(1).join('；')"
+          show-icon
+          :closable="false"
+        />
         <div v-else class="dashboard-metric-grid">
-          <el-card class="metric-card"><div class="metric-card__label">攻击拦截率</div><div class="metric-card__value is-success">{{ percent(securityCoverage.data.attackBlockRate) }}</div><div class="metric-card__trend">{{ securityCoverage.data.attackBlocked ?? 0 }}/{{ securityCoverage.data.attackTotal ?? 0 }}，目标 {{ percent(securityCoverage.data.attackBlockRateTarget) }}</div></el-card>
-          <el-card class="metric-card"><div class="metric-card__label">误报样本</div><div class="metric-card__value" :class="(securityCoverage.data.benignFalsePositives ?? 0) > (securityCoverage.data.falsePositiveLimit ?? 3) ? 'is-danger' : 'is-success'">{{ securityCoverage.data.benignFalsePositives ?? 0 }}</div><div class="metric-card__trend">良性 {{ securityCoverage.data.benignTotal ?? 0 }}，上限 {{ securityCoverage.data.falsePositiveLimit ?? 3 }}</div></el-card>
-          <el-card class="metric-card"><div class="metric-card__label">规则 / 文件</div><div class="metric-card__value is-primary">{{ securityCoverage.data.ruleCount ?? 0 }}</div><div class="metric-card__trend">文件 {{ securityCoverage.data.ruleFileCount ?? 0 }} / {{ securityCoverage.data.generatedAt || '--' }}</div></el-card>
-          <el-card class="metric-card"><div class="metric-card__label">漏拦 / 误报</div><div class="metric-card__value is-warning">{{ securityCoverage.data.missedAttacks?.length ?? 0 }} / {{ securityCoverage.data.falsePositives?.length ?? 0 }}</div><div class="metric-card__trend">{{ securityCoverage.data.missedAttacks?.[0]?.id || '无漏拦样本' }}</div></el-card>
+          <el-card class="metric-card"><div class="metric-card__label">攻击拦截率</div><div class="metric-card__value" :class="gateMetricClass(securityCoverage.data.gatePassed)">{{ percent(securityCoverage.data.attackBlockRate) }}</div><div class="metric-card__trend">{{ securityCoverage.data.attackBlocked ?? 0 }}/{{ securityCoverage.data.attackTotal ?? 0 }}，目标 {{ percent(securityCoverage.data.attackBlockRateTarget) }}<span v-if="securityCoverage.data.hasBaseline">，Δ {{ signedPercent(securityCoverage.data.attackBlockRateDelta) }}</span></div></el-card>
+          <el-card class="metric-card"><div class="metric-card__label">误报样本</div><div class="metric-card__value" :class="(securityCoverage.data.benignFalsePositives ?? 0) > (securityCoverage.data.falsePositiveLimit ?? 3) || (securityCoverage.data.benignFalseDelta ?? 0) > (securityCoverage.data.maxFalsePositiveRise ?? 0) ? 'is-danger' : 'is-success'">{{ securityCoverage.data.benignFalsePositives ?? 0 }}</div><div class="metric-card__trend">良性 {{ securityCoverage.data.benignTotal ?? 0 }}，上限 {{ securityCoverage.data.falsePositiveLimit ?? 3 }}<span v-if="securityCoverage.data.hasBaseline">，Δ {{ securityCoverage.data.benignFalseDelta ?? 0 }}</span></div></el-card>
+          <el-card class="metric-card"><div class="metric-card__label">规则版本 / 数量</div><div class="metric-card__value is-primary">{{ securityCoverage.data.ruleVersion || '--' }}</div><div class="metric-card__trend">{{ securityCoverage.data.ruleCount ?? 0 }} 条 / 文件 {{ securityCoverage.data.ruleFileCount ?? 0 }}</div></el-card>
+          <el-card class="metric-card"><div class="metric-card__label">漏拦 / 误报</div><div class="metric-card__value is-warning">{{ securityCoverage.data.missedAttacks?.length ?? 0 }} / {{ securityCoverage.data.falsePositives?.length ?? 0 }}</div><div class="metric-card__trend">{{ securityCoverage.data.falsePositives?.[0]?.id || securityCoverage.data.missedAttacks?.[0]?.id || '无高频样本' }}</div></el-card>
+        </div>
+        <div v-if="!securityCoverage.error" class="compact-info-grid">
+          <div class="compact-info-item"><span>报告时间</span><strong>{{ securityCoverage.data.generatedAt || '--' }}</strong><small>规则版本 {{ securityCoverage.data.ruleVersion || '--' }}</small></div>
+          <div class="compact-info-item"><span>Baseline</span><strong>{{ securityCoverage.data.hasBaseline ? (securityCoverage.data.baselineGeneratedAt || '--') : '未提供' }}</strong><small v-if="securityCoverage.data.hasBaseline">版本 {{ securityCoverage.data.baselineRuleVersion || '--' }}</small><small v-else>docs/security-coverage-baseline.json</small></div>
+          <div class="compact-info-item"><span>Top missed</span><strong>{{ securityCoverage.data.missedAttacks?.[0]?.id || '--' }}</strong><small>{{ securityCoverage.data.missedAttacks?.[0]?.category || '无漏拦样本' }}</small></div>
+          <div class="compact-info-item"><span>Top false positive</span><strong>{{ securityCoverage.data.falsePositives?.[0]?.id || '--' }}</strong><small>{{ securityCoverage.data.falsePositives?.[0]?.category || '无误报样本' }}</small></div>
         </div>
       </div>
       <div class="sl-card protection-panel" v-loading="ruleSets.loading">

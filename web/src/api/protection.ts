@@ -77,6 +77,7 @@ export interface SecurityCoverageSummary {
   generatedAt?: string
   ruleFileCount?: number
   ruleCount?: number
+  ruleVersion?: string
   attackTotal?: number
   attackBlocked?: number
   attackBlockRate?: number
@@ -87,6 +88,17 @@ export interface SecurityCoverageSummary {
   falsePositives?: SecurityCoverageOutcome[]
   attackBlockRateTarget?: number
   falsePositiveLimit?: number
+  maxBlockRateDrop?: number
+  maxFalsePositiveRise?: number
+  gatePassed?: boolean
+  gateFailures?: string[]
+  hasBaseline?: boolean
+  baselineGeneratedAt?: string
+  baselineRuleVersion?: string
+  baselineAttackRate?: number
+  baselineFalsePositives?: number
+  attackBlockRateDelta?: number
+  benignFalseDelta?: number
 }
 
 export interface ProtectionRuleUpdateEvaluation {

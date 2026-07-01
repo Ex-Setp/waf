@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -398,19 +400,31 @@ type protectionRuleSet struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 type securityCoverageResponse struct {
-	GeneratedAt           string                       `json:"generatedAt"`
-	RuleFileCount         int                          `json:"ruleFileCount"`
-	RuleCount             int                          `json:"ruleCount"`
-	AttackTotal           int                          `json:"attackTotal"`
-	AttackBlocked         int                          `json:"attackBlocked"`
-	AttackBlockRate       float64                      `json:"attackBlockRate"`
-	BenignTotal           int                          `json:"benignTotal"`
-	BenignFalsePositives  int                          `json:"benignFalsePositives"`
-	BenignFalseRate       float64                      `json:"benignFalseRate"`
-	MissedAttacks         []securityeval.SampleOutcome `json:"missedAttacks"`
-	FalsePositives        []securityeval.SampleOutcome `json:"falsePositives"`
-	AttackBlockRateTarget float64                      `json:"attackBlockRateTarget"`
-	FalsePositiveLimit    int                          `json:"falsePositiveLimit"`
+	GeneratedAt            string                       `json:"generatedAt"`
+	RuleFileCount          int                          `json:"ruleFileCount"`
+	RuleCount              int                          `json:"ruleCount"`
+	RuleVersion            string                       `json:"ruleVersion"`
+	AttackTotal            int                          `json:"attackTotal"`
+	AttackBlocked          int                          `json:"attackBlocked"`
+	AttackBlockRate        float64                      `json:"attackBlockRate"`
+	BenignTotal            int                          `json:"benignTotal"`
+	BenignFalsePositives   int                          `json:"benignFalsePositives"`
+	BenignFalseRate        float64                      `json:"benignFalseRate"`
+	MissedAttacks          []securityeval.SampleOutcome `json:"missedAttacks"`
+	FalsePositives         []securityeval.SampleOutcome `json:"falsePositives"`
+	AttackBlockRateTarget  float64                      `json:"attackBlockRateTarget"`
+	FalsePositiveLimit     int                          `json:"falsePositiveLimit"`
+	MaxBlockRateDrop       float64                      `json:"maxBlockRateDrop"`
+	MaxFalsePositiveRise   int                          `json:"maxFalsePositiveRise"`
+	GatePassed             bool                         `json:"gatePassed"`
+	GateFailures           []string                     `json:"gateFailures,omitempty"`
+	HasBaseline            bool                         `json:"hasBaseline"`
+	BaselineGeneratedAt    string                       `json:"baselineGeneratedAt,omitempty"`
+	BaselineRuleVersion    string                       `json:"baselineRuleVersion,omitempty"`
+	BaselineAttackRate     float64                      `json:"baselineAttackRate,omitempty"`
+	BaselineFalsePositives int                          `json:"baselineFalsePositives,omitempty"`
+	AttackBlockRateDelta   float64                      `json:"attackBlockRateDelta"`
+	BenignFalseDelta       int                          `json:"benignFalseDelta"`
 }
 type siteProtectionPolicyResponse struct {
 	Policies []siteProtectionPolicy `json:"policies"`
@@ -594,15 +608,17 @@ type ruleUpdateDiffItem struct {
 }
 
 type ruleUpdateEvaluationResponse struct {
-	Passed                    bool                         `json:"passed"`
-	Summary                   string                       `json:"summary,omitempty"`
-	BlockedReason             string                       `json:"blockedReason,omitempty"`
-	AttackBlockRate           float64                      `json:"attackBlockRate"`
-	AttackBlockRateDelta      float64                      `json:"attackBlockRateDelta"`
-	BenignFalsePositives      int                          `json:"benignFalsePositives"`
-	BenignFalsePositivesDelta int                          `json:"benignFalsePositivesDelta"`
-	MissedAttacks             []securityeval.SampleOutcome `json:"missedAttacks,omitempty"`
-	FalsePositives            []securityeval.SampleOutcome `json:"falsePositives,omitempty"`
+	Passed                       bool                         `json:"passed"`
+	Summary                      string                       `json:"summary,omitempty"`
+	BlockedReason                string                       `json:"blockedReason,omitempty"`
+	AttackBlockRate              float64                      `json:"attackBlockRate"`
+	AttackBlockRateDelta         float64                      `json:"attackBlockRateDelta"`
+	BenignFalsePositiveRate      float64                      `json:"benignFalsePositiveRate"`
+	BenignFalsePositiveRateDelta float64                      `json:"benignFalsePositiveRateDelta"`
+	BenignFalsePositives         int                          `json:"benignFalsePositives"`
+	BenignFalsePositivesDelta    int                          `json:"benignFalsePositivesDelta"`
+	MissedAttacks                []securityeval.SampleOutcome `json:"missedAttacks,omitempty"`
+	FalsePositives               []securityeval.SampleOutcome `json:"falsePositives,omitempty"`
 }
 
 type ruleUpdateLogResponse struct {
@@ -2204,10 +2220,19 @@ func (s *Server) handleProtectionSecurityCoverageAPI(w http.ResponseWriter, r *h
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, securityCoverageResponse{
+	var baseline *securityeval.Result
+	if root, rootErr := repoRoot(); rootErr == nil {
+		baselinePath := filepath.Join(root, "docs", "security-coverage-baseline.json")
+		if loaded, loadErr := securityeval.ReadBaseline(baselinePath); loadErr == nil {
+			baseline = &loaded
+		}
+	}
+	comparison := securityeval.CompareResults(result, baseline)
+	response := securityCoverageResponse{
 		GeneratedAt:           result.GeneratedAt.Format("2006-01-02"),
 		RuleFileCount:         result.RuleFileCount,
 		RuleCount:             result.RuleCount,
+		RuleVersion:           result.RuleVersion,
 		AttackTotal:           result.AttackTotal,
 		AttackBlocked:         result.AttackBlocked,
 		AttackBlockRate:       result.AttackBlockRate,
@@ -2218,7 +2243,21 @@ func (s *Server) handleProtectionSecurityCoverageAPI(w http.ResponseWriter, r *h
 		FalsePositives:        result.FalsePositives,
 		AttackBlockRateTarget: result.Thresholds.AttackBlockRate,
 		FalsePositiveLimit:    result.Thresholds.BenignFalsePositives,
-	})
+		MaxBlockRateDrop:      result.Thresholds.MaxBlockRateDrop,
+		MaxFalsePositiveRise:  result.Thresholds.MaxFalsePositiveRise,
+		GatePassed:            comparison.Gate.Passed,
+		GateFailures:          comparison.Gate.Failures,
+		HasBaseline:           comparison.HasBaseline,
+		AttackBlockRateDelta:  comparison.AttackBlockDelta,
+		BenignFalseDelta:      comparison.BenignFalseDelta,
+	}
+	if comparison.Baseline != nil {
+		response.BaselineGeneratedAt = comparison.Baseline.GeneratedAt.Format("2006-01-02")
+		response.BaselineRuleVersion = comparison.Baseline.RuleVersion
+		response.BaselineAttackRate = comparison.Baseline.AttackBlockRate
+		response.BaselineFalsePositives = comparison.Baseline.BenignFalsePositives
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleProtectionRuleUpdatesAPI(w http.ResponseWriter, r *http.Request, suffix string) {
@@ -3429,38 +3468,20 @@ func (s *Server) evaluateCandidateRuleSet(ctx context.Context, baseline, candida
 	if err != nil {
 		return ruleUpdateEvaluationResponse{}, err
 	}
-	blockedReason := ""
-	passed := true
-	if err := candidateResult.Validate(); err != nil {
-		passed = false
-		blockedReason = err.Error()
-	}
-	attackDelta := candidateResult.AttackBlockRate - baselineResult.AttackBlockRate
-	fpDelta := candidateResult.BenignFalsePositives - baselineResult.BenignFalsePositives
-	if attackDelta < 0 || fpDelta > 0 {
-		passed = false
-		if blockedReason == "" {
-			var reasons []string
-			if attackDelta < 0 {
-				reasons = append(reasons, fmt.Sprintf("attack block rate regressed by %.2f%%", attackDelta*100))
-			}
-			if fpDelta > 0 {
-				reasons = append(reasons, fmt.Sprintf("benign false positives increased by %d", fpDelta))
-			}
-			blockedReason = strings.Join(reasons, "; ")
-		}
-	}
+	comparison := securityeval.CompareResults(candidateResult, &baselineResult)
 	summary := fmt.Sprintf("attack %.2f%% -> %.2f%%, false positives %d -> %d", baselineResult.AttackBlockRate*100, candidateResult.AttackBlockRate*100, baselineResult.BenignFalsePositives, candidateResult.BenignFalsePositives)
 	return ruleUpdateEvaluationResponse{
-		Passed:                    passed,
-		Summary:                   summary,
-		BlockedReason:             blockedReason,
-		AttackBlockRate:           candidateResult.AttackBlockRate,
-		AttackBlockRateDelta:      attackDelta,
-		BenignFalsePositives:      candidateResult.BenignFalsePositives,
-		BenignFalsePositivesDelta: fpDelta,
-		MissedAttacks:             candidateResult.MissedAttacks,
-		FalsePositives:            candidateResult.FalsePositives,
+		Passed:                       comparison.Gate.Passed,
+		Summary:                      summary,
+		BlockedReason:                comparison.Gate.BlockedReason,
+		AttackBlockRate:              candidateResult.AttackBlockRate,
+		AttackBlockRateDelta:         comparison.AttackBlockDelta,
+		BenignFalsePositiveRate:      candidateResult.BenignFalseRate,
+		BenignFalsePositiveRateDelta: candidateResult.BenignFalseRate - baselineResult.BenignFalseRate,
+		BenignFalsePositives:         candidateResult.BenignFalsePositives,
+		BenignFalsePositivesDelta:    comparison.BenignFalseDelta,
+		MissedAttacks:                candidateResult.MissedAttacks,
+		FalsePositives:               candidateResult.FalsePositives,
 	}, nil
 }
 
@@ -3654,13 +3675,15 @@ func (s *Server) ruleUpdateLogToAPI(item database.ProtectionRuleUpdateLog) ruleU
 		RolledBackTo:    item.RolledBackToVersion,
 		SnapshotVersion: item.RollbackSnapshotVersion,
 		Evaluation: ruleUpdateEvaluationResponse{
-			Passed:                    item.EvaluationPassed,
-			Summary:                   item.EvaluationSummary,
-			BlockedReason:             item.BlockedReason,
-			AttackBlockRate:           item.AttackBlockRate,
-			AttackBlockRateDelta:      item.AttackBlockRateDelta,
-			BenignFalsePositives:      item.BenignFalsePositives,
-			BenignFalsePositivesDelta: item.BenignFalsePositivesDelta,
+			Passed:                       item.EvaluationPassed,
+			Summary:                      item.EvaluationSummary,
+			BlockedReason:                item.BlockedReason,
+			AttackBlockRate:              item.AttackBlockRate,
+			AttackBlockRateDelta:         item.AttackBlockRateDelta,
+			BenignFalsePositiveRate:      0,
+			BenignFalsePositiveRateDelta: 0,
+			BenignFalsePositives:         item.BenignFalsePositives,
+			BenignFalsePositivesDelta:    item.BenignFalsePositivesDelta,
 		},
 		CreatedAt: formatMillis(item.CreatedAt),
 		UpdatedAt: formatMillis(item.UpdatedAt),
@@ -4794,6 +4817,24 @@ func formatMillis(ms int64) string {
 	}
 	return time.UnixMilli(ms).Format("2006-01-02 15:04:05")
 }
+
+func repoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("project root with go.mod not found from %s", dir)
+		}
+		dir = parent
+	}
+}
+
 func (s *Server) blockedToday() int {
 	if s.reports == nil {
 		return 0

@@ -1,0 +1,143 @@
+{
+  "result": {
+    "rulesDir": "D:\\aa\\waf\\waf\\rules",
+    "corpusDir": "D:\\aa\\waf\\waf\\testdata\\security-corpus",
+    "ruleFileCount": 12,
+    "ruleCount": 572,
+    "ruleVersion": "custom",
+    "attackTotal": 73,
+    "attackBlocked": 70,
+    "attackBlockRate": 0.958904109589041,
+    "benignTotal": 67,
+    "benignFalsePositives": 0,
+    "benignFalseRate": 0,
+    "category": {
+      "api": {
+        "attackTotal": 8,
+        "attackBlocked": 6,
+        "attackBlockRate": 0.75,
+        "benignTotal": 20,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "bot": {
+        "attackTotal": 9,
+        "attackBlocked": 9,
+        "attackBlockRate": 1,
+        "benignTotal": 5,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "protocol": {
+        "attackTotal": 7,
+        "attackBlocked": 7,
+        "attackBlockRate": 1,
+        "benignTotal": 6,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "rce": {
+        "attackTotal": 9,
+        "attackBlocked": 8,
+        "attackBlockRate": 0.8888888888888888,
+        "benignTotal": 1,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "scanner": {
+        "attackTotal": 12,
+        "attackBlocked": 12,
+        "attackBlockRate": 1,
+        "benignTotal": 8,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "sqli": {
+        "attackTotal": 10,
+        "attackBlocked": 10,
+        "attackBlockRate": 1,
+        "benignTotal": 4,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "ssrf": {
+        "attackTotal": 3,
+        "attackBlocked": 3,
+        "attackBlockRate": 1,
+        "benignTotal": 3,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "traversal": {
+        "attackTotal": 3,
+        "attackBlocked": 3,
+        "attackBlockRate": 1,
+        "benignTotal": 5,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "upload": {
+        "attackTotal": 2,
+        "attackBlocked": 2,
+        "attackBlockRate": 1,
+        "benignTotal": 6,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "xss": {
+        "attackTotal": 8,
+        "attackBlocked": 8,
+        "attackBlockRate": 1,
+        "benignTotal": 5,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      },
+      "xxe": {
+        "attackTotal": 2,
+        "attackBlocked": 2,
+        "attackBlockRate": 1,
+        "benignTotal": 4,
+        "benignFalsePositives": 0,
+        "benignFalseRate": 0
+      }
+    },
+    "missedAttacks": [
+      {
+        "id": "api-idor-user-id",
+        "category": "api",
+        "decision": "allow",
+        "score": 0,
+        "ruleIds": null,
+        "rules": null
+      },
+      {
+        "id": "api-jwt-none-body",
+        "category": "api",
+        "decision": "allow",
+        "score": 1,
+        "ruleIds": [
+          910062
+        ],
+        "rules": [
+          "910062:API: JSON API Request"
+        ]
+      },
+      {
+        "id": "rce-ognl-struts2",
+        "category": "rce",
+        "decision": "allow",
+        "score": 0,
+        "ruleIds": null,
+        "rules": null
+      }
+    ],
+    "falsePositives": null,
+    "generatedAt": "2026-06-30T00:00:00Z",
+    "thresholds": {
+      "attackBlockRate": 0.9,
+      "benignFalsePositives": 3,
+      "maxBlockRateDrop": 0,
+      "maxFalsePositiveRise": 0
+    }
+  }
+}

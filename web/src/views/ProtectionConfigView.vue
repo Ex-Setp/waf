@@ -7,6 +7,7 @@ import {
   createProtectionWhitelist,
   deleteProtectionRule,
   deleteProtectionWhitelist,
+  exportProtectionRules,
   fetchCRSStatus,
   fetchCCBotEvents,
   fetchCCBotPolicies,
@@ -16,6 +17,7 @@ import {
   fetchSecurityCoverage,
   fetchProtectionSemanticFingerprints,
   fetchProtectionWhitelists,
+  importProtectionRules,
   fetchSitePolicyAudit,
   fetchSitePolicyVersions,
   fetchSiteProtectionPolicies,
@@ -28,8 +30,10 @@ import {
   previewRequestParser,
   publishSiteProtectionPolicy,
   reloadCRS,
+  rollbackProtectionRules,
   rollbackSiteProtectionPolicy,
   setProtectionRuleEnabled,
+  validateProtectionRules,
   updateProtectionRule,
   updateProtectionWhitelist,
   type AttackEventSummary,
@@ -39,6 +43,7 @@ import {
   type ProtectionRule,
   type ProtectionRulePayload,
   type ProtectionRuleSet,
+  type ProtectionRuleValidationError,
   type ProtectionWhitelist,
   type ProtectionWhitelistPayload,
   type RequestParserField,
@@ -81,6 +86,7 @@ const detailPayload = ref<unknown>(null)
 const policyOperatingId = ref<number | string | null>(null)
 const policyVersionState = reactive<{ loading: boolean; error: string; siteId: number | string | null; items: SiteProtectionPolicy[]; audit: SitePolicyAuditEntry[] }>({ loading: false, error: '', siteId: null, items: [], audit: [] })
 const ruleDialogVisible = ref(false)
+const ruleImportInput = ref<HTMLInputElement | null>(null)
 const whitelistDialogVisible = ref(false)
 const whitelistSaving = ref(false)
 const whitelistError = ref('')
@@ -97,7 +103,11 @@ const whitelistForm = reactive<ProtectionWhitelistPayload>({
   status: 'enabled',
 })
 const ruleSaving = ref(false)
+const ruleImporting = ref(false)
+const ruleRollingBack = ref(false)
 const ruleError = ref('')
+const ruleRuntimeVersion = ref('')
+const ruleHotReload = ref(false)
 const editingRuleId = ref<number | string | null>(null)
 const ruleForm = reactive<ProtectionRulePayload>({
   ruleId: 0,
@@ -181,12 +191,16 @@ async function loadPolicies(): Promise<void> {
 }
 
 async function loadRules(): Promise<void> {
+  const loadedRulesPromise = fetchProtectionRules()
   await Promise.all([
     loadCRSStatus(),
     loadSecurityCoverage(),
     loadState(ruleSets, fetchProtectionRuleSets),
-    loadState(rules, fetchProtectionRules),
+    loadState(rules, () => loadedRulesPromise),
   ])
+  const loadedRules = await loadedRulesPromise
+  ruleRuntimeVersion.value = String((loadedRules as { items: ProtectionRule[]; total: number; runtimeVersion?: string }).runtimeVersion || '')
+  ruleHotReload.value = rules.items.some((item) => item.hotReload === true)
 }
 
 async function loadCRSStatus(): Promise<void> {
@@ -403,6 +417,60 @@ async function saveRule(): Promise<void> {
   } finally {
     ruleSaving.value = false
   }
+}
+
+function formatRuleValidationErrors(errors: ProtectionRuleValidationError[] | undefined): string {
+  if (!errors?.length) return '规则校验失败'
+  return errors.map((item) => [item.line ? `line ${item.line}` : '', item.field || '', item.message].filter(Boolean).join(' ')).join('; ')
+}
+
+async function validateRuleForm(): Promise<void> {
+  try {
+    const result = await validateProtectionRules([{ ...ruleForm }])
+    ruleError.value = result.valid ? '' : formatRuleValidationErrors(result.errors)
+  } catch (error) {
+    ruleError.value = errorMessage(error)
+  }
+}
+
+async function importRuleFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  ruleImporting.value = true
+  try {
+    const content = await file.text()
+    const payload = JSON.parse(content) as ProtectionRulePayload[]
+    const result = await importProtectionRules(payload)
+    ruleError.value = result.valid ? '' : formatRuleValidationErrors(result.errors)
+    await loadRules()
+  } catch (error) {
+    ruleError.value = errorMessage(error)
+  } finally {
+    input.value = ''
+    ruleImporting.value = false
+  }
+}
+
+async function exportRulesJson(): Promise<void> {
+  const data = await exportProtectionRules()
+  openDetail('规则导出 JSON', data)
+}
+
+async function rollbackRules(): Promise<void> {
+  ruleRollingBack.value = true
+  try {
+    await rollbackProtectionRules()
+    await loadRules()
+  } catch (error) {
+    ruleError.value = errorMessage(error)
+  } finally {
+    ruleRollingBack.value = false
+  }
+}
+
+function openRuleImport(): void {
+  ruleImportInput.value?.click()
 }
 
 async function toggleRule(rule: ProtectionRule): Promise<void> {
@@ -644,7 +712,7 @@ onMounted(() => {
         </el-table>
       </div>
       <div class="sl-card protection-panel" v-loading="rules.loading">
-        <div class="sl-card-head"><span class="sl-card-title">规则列表</span><div class="protection-actions"><span class="page-hint">支持 custom 规则 CRUD/启停；CRS/system 运行时规则只读展示 source。</span><el-button type="primary" @click="openCreateRule">新增自定义规则</el-button></div></div>
+        <div class="sl-card-head"><span class="sl-card-title">规则列表</span><div class="protection-actions"><span class="page-hint">运行版本 {{ ruleRuntimeVersion || '--' }} / 热更新 {{ ruleHotReload ? 'ok' : 'off' }}</span><el-button @click="exportRulesJson">导出 JSON</el-button><el-button :loading="ruleImporting" @click="openRuleImport">导入 JSON</el-button><el-button type="warning" :loading="ruleRollingBack" @click="rollbackRules">回滚上次发布</el-button><el-button type="primary" @click="openCreateRule">新增自定义规则</el-button><input ref="ruleImportInput" type="file" accept="application/json" style="display:none" @change="importRuleFile" /></div></div>
         <el-alert v-if="rules.error" type="error" :title="rules.error" show-icon :closable="false" />
         <el-table v-else :data="rules.items" empty-text="暂无真实规则；新增 custom 规则后会热更新到检测运行时">
           <el-table-column prop="ruleId" label="规则 ID" width="130" />
@@ -654,6 +722,9 @@ onMounted(() => {
           <el-table-column prop="score" label="分数" width="80" />
           <el-table-column prop="action" label="动作" width="100" />
           <el-table-column prop="source" label="来源" width="110" />
+          <el-table-column prop="hits" label="命中" width="90" />
+          <el-table-column prop="runtimeVersion" label="运行版本" min-width="150" />
+          <el-table-column label="热更新" width="90"><template #default="{ row }: { row: ProtectionRule }">{{ row.hotReload ? 'yes' : 'no' }}</template></el-table-column>
           <el-table-column label="状态" width="100"><template #default="{ row }: { row: ProtectionRule }"><el-tag :type="statusTag(row.enabled)">{{ row.enabled === false ? '禁用' : '启用' }}</el-tag></template></el-table-column>
           <el-table-column label="操作" width="230"><template #default="{ row }: { row: ProtectionRule }"><el-button link type="primary" @click="openDetail('规则详情', row)">详情</el-button><el-button link type="primary" @click="openEditRule(row)">编辑</el-button><el-button link :type="row.enabled === false ? 'success' : 'warning'" @click="toggleRule(row)">{{ row.enabled === false ? '启用' : '禁用' }}</el-button><el-button link type="danger" @click="removeRule(row)">删除</el-button></template></el-table-column>
         </el-table>
@@ -834,7 +905,7 @@ onMounted(() => {
         <el-form-item label="状态"><el-switch v-model="ruleForm.enabled" active-text="启用" inactive-text="禁用" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="ruleForm.description" type="textarea" :rows="2" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="ruleDialogVisible = false">取消</el-button><el-button type="primary" :loading="ruleSaving" @click="saveRule">保存并热更新</el-button></template>
+      <template #footer><el-button @click="validateRuleForm">校验</el-button><el-button @click="ruleDialogVisible = false">取消</el-button><el-button type="primary" :loading="ruleSaving" @click="saveRule">保存并热更新</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="whitelistDialogVisible" :title="editingWhitelistId ? '编辑白名单/例外' : '新增白名单/例外'" width="680px">

@@ -1,10 +1,12 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,6 +23,8 @@ import (
 	"aegis-waf/internal/pipeline"
 	"aegis-waf/internal/requestparser"
 	"aegis-waf/internal/securityeval"
+
+	"gorm.io/gorm"
 )
 
 type dashboardOverview struct {
@@ -350,24 +354,29 @@ type ccPolicyPayload struct {
 	Enabled       *bool  `json:"enabled"`
 }
 type protectionRuleResponse struct {
-	ID          string `json:"id"`
-	RuleID      string `json:"ruleId"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Category    string `json:"category"`
-	Variable    string `json:"variable"`
-	Operator    string `json:"operator"`
-	Pattern     string `json:"pattern"`
-	Severity    string `json:"severity"`
-	Score       int    `json:"score"`
-	Action      string `json:"action"`
-	Source      string `json:"source"`
-	Enabled     bool   `json:"enabled"`
-	UpdatedAt   string `json:"updatedAt"`
+	ID             string `json:"id"`
+	RuleID         string `json:"ruleId"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Category       string `json:"category"`
+	Variable       string `json:"variable"`
+	Operator       string `json:"operator"`
+	Pattern        string `json:"pattern"`
+	Severity       string `json:"severity"`
+	Score          int    `json:"score"`
+	Action         string `json:"action"`
+	Source         string `json:"source"`
+	Enabled        bool   `json:"enabled"`
+	Hits           int64  `json:"hits,omitempty"`
+	RuntimeVersion string `json:"runtimeVersion,omitempty"`
+	HotReload      bool   `json:"hotReload,omitempty"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 type protectionRuleListResponse struct {
-	Rules []protectionRuleResponse `json:"rules"`
-	Total int                      `json:"total"`
+	Rules          []protectionRuleResponse `json:"rules"`
+	Total          int                      `json:"total"`
+	RuntimeVersion string                   `json:"runtimeVersion,omitempty"`
+	HotReload      bool                     `json:"hotReload,omitempty"`
 }
 type protectionRuleSetResponse struct {
 	RuleSets []protectionRuleSet `json:"ruleSets"`
@@ -516,6 +525,63 @@ type protectionRulePayload struct {
 	Score       int    `json:"score"`
 	Source      string `json:"source"`
 	Enabled     *bool  `json:"enabled"`
+}
+
+type protectionRuleValidationError struct {
+	Field   string `json:"field,omitempty"`
+	Line    int    `json:"line,omitempty"`
+	Message string `json:"message"`
+}
+
+type protectionRuleWriteResponse struct {
+	Rule           protectionRuleResponse `json:"rule"`
+	RuntimeVersion string                 `json:"runtimeVersion,omitempty"`
+	HotReload      bool                   `json:"hotReload,omitempty"`
+}
+
+type protectionRuleValidationResponse struct {
+	Valid          bool                            `json:"valid"`
+	Errors         []protectionRuleValidationError `json:"errors"`
+	RuntimeVersion string                          `json:"runtimeVersion,omitempty"`
+	HotReload      bool                            `json:"hotReload,omitempty"`
+}
+
+type protectionRuleImportResponse struct {
+	Rules          []protectionRuleResponse        `json:"rules"`
+	Total          int                             `json:"total"`
+	Valid          bool                            `json:"valid"`
+	Errors         []protectionRuleValidationError `json:"errors,omitempty"`
+	RuntimeVersion string                          `json:"runtimeVersion,omitempty"`
+	HotReload      bool                            `json:"hotReload,omitempty"`
+}
+
+type protectionRuleRollbackResponse struct {
+	Rules          []protectionRuleResponse `json:"rules"`
+	Total          int                      `json:"total"`
+	RolledBackTo   string                   `json:"rolledBackTo"`
+	RuntimeVersion string                   `json:"runtimeVersion,omitempty"`
+	HotReload      bool                     `json:"hotReload,omitempty"`
+}
+
+type protectionRuleTestPayload struct {
+	Method  string                 `json:"method"`
+	Path    string                 `json:"path"`
+	URI     string                 `json:"uri"`
+	Headers map[string]string      `json:"headers"`
+	Body    string                 `json:"body"`
+	Args    map[string][]string    `json:"args"`
+	Rule    *protectionRulePayload `json:"rule,omitempty"`
+}
+
+type protectionRuleTestResponse struct {
+	Matched        bool                            `json:"matched"`
+	Decision       string                          `json:"decision"`
+	Score          int                             `json:"score"`
+	Severity       string                          `json:"severity,omitempty"`
+	Matches        []detection.MatchedRule         `json:"matches"`
+	Errors         []protectionRuleValidationError `json:"errors,omitempty"`
+	RuntimeVersion string                          `json:"runtimeVersion,omitempty"`
+	HotReload      bool                            `json:"hotReload,omitempty"`
 }
 
 type trafficOverviewResponse struct {
@@ -1839,7 +1905,8 @@ func (s *Server) handleProtectionRuleSetsAPI(w http.ResponseWriter, r *http.Requ
 		status := s.crsManager.Status()
 		groups["crs:owasp-crs"] = &protectionRuleSet{ID: "crs:owasp-crs", Name: firstNonEmpty(status.Version, "OWASP CRS"), Source: "crs", Version: status.Version, Enabled: status.Enabled && status.Loaded, RuleCount: status.RuleCount}
 	}
-	for _, rule := range s.runtimeProtectionRules(r.Context()) {
+	runtimeRules, _, _ := s.runtimeProtectionRules(r.Context())
+	for _, rule := range runtimeRules {
 		source := firstNonEmpty(rule.Source, "custom")
 		category := firstNonEmpty(rule.Category, "default")
 		key := source + ":" + category
@@ -1927,10 +1994,14 @@ func (s *Server) handleProtectionSecurityCoverageAPI(w http.ResponseWriter, r *h
 func (s *Server) handleProtectionRulesAPI(w http.ResponseWriter, r *http.Request, suffix string) {
 	if s.db == nil {
 		if r.Method == http.MethodGet && (suffix == "" || suffix == "/") {
-			writeJSON(w, http.StatusOK, protectionRuleListResponse{Rules: s.runtimeProtectionRules(r.Context()), Total: len(s.runtimeProtectionRules(r.Context()))})
+			rules, runtimeVersion, hotReload := s.runtimeProtectionRules(r.Context())
+			writeJSON(w, http.StatusOK, protectionRuleListResponse{Rules: rules, Total: len(rules), RuntimeVersion: runtimeVersion, HotReload: hotReload})
 			return
 		}
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "database unavailable"})
+		return
+	}
+	if handled := s.handleProtectionRuleOperationsAPI(w, r, suffix); handled {
 		return
 	}
 	id, action, isAction, err := parseProtectionRuleAction(suffix)
@@ -1949,28 +2020,28 @@ func (s *Server) handleProtectionRulesAPI(w http.ResponseWriter, r *http.Request
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, protectionRuleListResponse{Rules: s.runtimeProtectionRules(r.Context()), Total: len(s.runtimeProtectionRules(r.Context()))})
+		rules, runtimeVersion, hotReload := s.runtimeProtectionRules(r.Context())
+		writeJSON(w, http.StatusOK, protectionRuleListResponse{Rules: rules, Total: len(rules), RuntimeVersion: runtimeVersion, HotReload: hotReload})
 	case http.MethodPost:
-		var payload protectionRulePayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		payload, errors := decodeSingleProtectionRulePayload(r.Body)
+		if len(errors) > 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
 			return
 		}
-		rule, err := payload.toModel(0)
+		rule, validationErrors := validateProtectionRulePayload(*payload, 0)
+		if len(validationErrors) > 0 {
+			writeJSON(w, http.StatusBadRequest, protectionRuleValidationResponse{Valid: false, Errors: validationErrors})
+			return
+		}
+		runtimeVersion, hotReload, err := s.persistProtectionRuleChange(r.Context(), "create", func(tx *gorm.DB) error {
+			return tx.Create(&rule).Error
+		}, []database.ProtectionRule{rule})
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
-			return
-		}
-		if err := s.db.WithContext(r.Context()).Create(&rule).Error; err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
-			return
-		}
-		if err := s.applyProtectionRuleRuntime(r.Context(), rule); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 			return
 		}
 		s.recordAuditEvent(r.Context(), "protection_rule", 0, "", fmt.Sprintf("rule:%d", rule.RuleID), "create", rule.Name)
-		writeJSON(w, http.StatusCreated, protectionRuleToAPI(rule))
+		writeJSON(w, http.StatusCreated, protectionRuleWriteResponse{Rule: protectionRuleToAPI(rule, 0, runtimeVersion, hotReload), RuntimeVersion: runtimeVersion, HotReload: hotReload})
 	case http.MethodPut:
 		if !hasID {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "rule id required"})
@@ -1981,26 +2052,26 @@ func (s *Server) handleProtectionRulesAPI(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "rule not found"})
 			return
 		}
-		var payload protectionRulePayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		payload, errors := decodeSingleProtectionRulePayload(r.Body)
+		if len(errors) > 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
 			return
 		}
-		updated, err := payload.merge(existing)
+		updated, validationErrors := validateProtectionRulePayload(*payload, existing.ID)
+		if len(validationErrors) > 0 {
+			writeJSON(w, http.StatusBadRequest, protectionRuleValidationResponse{Valid: false, Errors: validationErrors})
+			return
+		}
+		updated.CreatedAt = existing.CreatedAt
+		runtimeVersion, hotReload, err := s.persistProtectionRuleChange(r.Context(), "update", func(tx *gorm.DB) error {
+			return tx.Save(&updated).Error
+		}, []database.ProtectionRule{updated})
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 			return
 		}
-		if err := s.db.WithContext(r.Context()).Save(&updated).Error; err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
-			return
-		}
-		if err := s.applyProtectionRuleRuntime(r.Context(), updated); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
-			return
-		}
 		s.recordAuditEvent(r.Context(), "protection_rule", 0, "", fmt.Sprintf("rule:%d", updated.RuleID), "update", updated.Name)
-		writeJSON(w, http.StatusOK, protectionRuleToAPI(updated))
+		writeJSON(w, http.StatusOK, protectionRuleWriteResponse{Rule: protectionRuleToAPI(updated, 0, runtimeVersion, hotReload), RuntimeVersion: runtimeVersion, HotReload: hotReload})
 	case http.MethodDelete:
 		if !hasID {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "rule id required"})
@@ -2008,12 +2079,12 @@ func (s *Server) handleProtectionRulesAPI(w http.ResponseWriter, r *http.Request
 		}
 		var existing database.ProtectionRule
 		_ = s.db.WithContext(r.Context()).First(&existing, id).Error
-		if err := s.db.WithContext(r.Context()).Delete(&database.ProtectionRule{}, id).Error; err != nil {
+		_, _, err := s.persistProtectionRuleChange(r.Context(), "delete", func(tx *gorm.DB) error {
+			return tx.Delete(&database.ProtectionRule{}, id).Error
+		}, nil)
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 			return
-		}
-		if existing.RuleID > 0 && s.detectionEngine != nil {
-			_ = s.detectionEngine.DeleteRuntimeRule(existing.RuleID)
 		}
 		s.recordAuditEvent(r.Context(), "protection_rule", 0, "", fmt.Sprintf("rule:%d", existing.RuleID), "delete", existing.Name)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -2033,30 +2104,32 @@ func (s *Server) handleProtectionRuleToggle(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	rule.Enabled = action == "enable"
-	if err := s.db.WithContext(r.Context()).Save(&rule).Error; err != nil {
+	runtimeVersion, hotReload, err := s.persistProtectionRuleChange(r.Context(), action, func(tx *gorm.DB) error {
+		return tx.Save(&rule).Error
+	}, []database.ProtectionRule{rule})
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
-	if err := s.applyProtectionRuleRuntime(r.Context(), rule); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
-		return
-	}
 	s.recordAuditEvent(r.Context(), "protection_rule", 0, "", fmt.Sprintf("rule:%d", rule.RuleID), action, rule.Name)
-	writeJSON(w, http.StatusOK, protectionRuleToAPI(rule))
+	writeJSON(w, http.StatusOK, protectionRuleWriteResponse{Rule: protectionRuleToAPI(rule, 0, runtimeVersion, hotReload), RuntimeVersion: runtimeVersion, HotReload: hotReload})
 }
 
-func (s *Server) runtimeProtectionRules(ctx context.Context) []protectionRuleResponse {
+func (s *Server) runtimeProtectionRules(ctx context.Context) ([]protectionRuleResponse, string, bool) {
 	fromRuntime := map[int]protectionRuleResponse{}
+	runtimeVersion := currentProtectionRuleRuntimeVersion()
+	hotReload := s.detectionEngine != nil
 	if s.detectionEngine != nil {
 		for _, rule := range s.detectionEngine.Rules() {
-			fromRuntime[rule.ID] = protectionDetectionRuleToAPI(rule)
+			fromRuntime[rule.ID] = protectionDetectionRuleToAPI(rule, runtimeVersion, hotReload)
 		}
 	}
+	hitsByRuleID := s.ruleHitsByRuleID(ctx)
 	if s.db != nil {
 		var persisted []database.ProtectionRule
 		_ = s.db.WithContext(ctx).Order("rule_id asc").Find(&persisted).Error
 		for _, rule := range persisted {
-			fromRuntime[rule.RuleID] = protectionRuleToAPI(rule)
+			fromRuntime[rule.RuleID] = protectionRuleToAPI(rule, hitsByRuleID[rule.RuleID], runtimeVersion, hotReload)
 		}
 	}
 	ids := make([]int, 0, len(fromRuntime))
@@ -2068,7 +2141,7 @@ func (s *Server) runtimeProtectionRules(ctx context.Context) []protectionRuleRes
 	for _, id := range ids {
 		out = append(out, fromRuntime[id])
 	}
-	return out
+	return out, runtimeVersion, hotReload
 }
 
 func (s *Server) reloadProtectionRules(ctx context.Context) error {
@@ -2078,6 +2151,21 @@ func (s *Server) reloadProtectionRules(ctx context.Context) error {
 	var rules []database.ProtectionRule
 	if err := s.db.WithContext(ctx).Order("rule_id asc").Find(&rules).Error; err != nil {
 		return err
+	}
+	persisted := make(map[int]struct{}, len(rules))
+	for _, rule := range rules {
+		persisted[rule.RuleID] = struct{}{}
+	}
+	for _, existing := range s.detectionEngine.Rules() {
+		switch strings.ToLower(strings.TrimSpace(existing.Source)) {
+		case "custom", "semantic", "system":
+			if _, ok := persisted[existing.ID]; ok {
+				continue
+			}
+			if err := s.detectionEngine.DeleteRuntimeRule(existing.ID); err != nil {
+				return err
+			}
+		}
 	}
 	for _, rule := range rules {
 		if err := s.detectionEngine.UpsertRuntimeRule(protectionRuleToDetection(rule)); err != nil {
@@ -2095,6 +2183,505 @@ func (s *Server) applyProtectionRuleRuntime(ctx context.Context, rule database.P
 		return err
 	}
 	return s.detectionEngine.Reload(ctx)
+}
+
+func (s *Server) handleProtectionRuleOperationsAPI(w http.ResponseWriter, r *http.Request, suffix string) bool {
+	operation := strings.Trim(strings.TrimSpace(suffix), "/")
+	switch operation {
+	case "validate":
+		s.handleProtectionRuleValidateAPI(w, r)
+		return true
+	case "test":
+		s.handleProtectionRuleTestAPI(w, r)
+		return true
+	case "import":
+		s.handleProtectionRuleImportAPI(w, r)
+		return true
+	case "export":
+		s.handleProtectionRuleExportAPI(w, r)
+		return true
+	case "rollback":
+		s.handleProtectionRuleRollbackAPI(w, r)
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) handleProtectionRuleValidateAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	_, errors, malformed := decodeProtectionRuleValidationBody(r.Body)
+	if malformed {
+		writeJSON(w, http.StatusBadRequest, protectionRuleValidationResponse{Valid: false, Errors: errors})
+		return
+	}
+	valid := len(errors) == 0
+	status := http.StatusOK
+	if !valid {
+		status = http.StatusBadRequest
+	}
+	runtimeVersion := currentProtectionRuleRuntimeVersion()
+	writeJSON(w, status, protectionRuleValidationResponse{Valid: valid, Errors: errors, RuntimeVersion: runtimeVersion, HotReload: s.detectionEngine != nil})
+}
+
+func (s *Server) handleProtectionRuleTestAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var payload protectionRuleTestPayload
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid json"})
+		return
+	}
+	engine, targetRule, errors := s.protectionRuleTestEngine(payload)
+	if len(errors) > 0 {
+		writeJSON(w, http.StatusBadRequest, protectionRuleTestResponse{Errors: errors, RuntimeVersion: currentProtectionRuleRuntimeVersion(), HotReload: s.detectionEngine != nil})
+		return
+	}
+	headers := http.Header{}
+	for key, value := range payload.Headers {
+		headers.Set(key, value)
+	}
+	uri := strings.TrimSpace(payload.URI)
+	if uri == "" {
+		uri = strings.TrimSpace(payload.Path)
+	}
+	if uri == "" {
+		uri = "/"
+	}
+	result, err := engine.Inspect(r.Context(), detection.Request{
+		Method:  firstNonEmpty(strings.TrimSpace(payload.Method), http.MethodGet),
+		URI:     uri,
+		Headers: headers,
+		Body:    payload.Body,
+		Args:    payload.Args,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	matched := false
+	for _, match := range result.Matches {
+		if targetRule == nil || match.ID == targetRule.RuleID {
+			matched = true
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, protectionRuleTestResponse{
+		Matched:        matched,
+		Decision:       string(result.Decision),
+		Score:          result.Score,
+		Severity:       result.Severity,
+		Matches:        result.Matches,
+		RuntimeVersion: currentProtectionRuleRuntimeVersion(),
+		HotReload:      s.detectionEngine != nil,
+	})
+}
+
+func (s *Server) handleProtectionRuleImportAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	rules, errors, malformed := decodeProtectionRuleList(r.Body)
+	if malformed {
+		writeJSON(w, http.StatusBadRequest, protectionRuleImportResponse{Valid: false, Errors: append(errors, protectionRuleValidationError{Message: "invalid json"}), RuntimeVersion: currentProtectionRuleRuntimeVersion(), HotReload: s.detectionEngine != nil})
+		return
+	}
+	if len(errors) > 0 {
+		writeJSON(w, http.StatusBadRequest, protectionRuleImportResponse{Valid: false, Errors: errors, RuntimeVersion: currentProtectionRuleRuntimeVersion(), HotReload: s.detectionEngine != nil})
+		return
+	}
+	runtimeVersion, hotReload, err := s.replaceCustomProtectionRules(r.Context(), "import", rules)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	for _, rule := range rules {
+		s.recordAuditEvent(r.Context(), "protection_rule", 0, "", fmt.Sprintf("rule:%d", rule.RuleID), "import", rule.Name)
+	}
+	apiRules := make([]protectionRuleResponse, 0, len(rules))
+	for _, rule := range rules {
+		apiRules = append(apiRules, protectionRuleToAPI(rule, 0, runtimeVersion, hotReload))
+	}
+	writeJSON(w, http.StatusOK, protectionRuleImportResponse{Rules: apiRules, Total: len(apiRules), Valid: true, RuntimeVersion: runtimeVersion, HotReload: hotReload})
+}
+
+func (s *Server) handleProtectionRuleExportAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var rules []database.ProtectionRule
+	if err := s.db.WithContext(r.Context()).Order("rule_id asc").Find(&rules).Error; err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rules)
+}
+
+func (s *Server) handleProtectionRuleRollbackAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "method not allowed"})
+		return
+	}
+	var snapshot database.ProtectionRulePublishSnapshot
+	if err := s.db.WithContext(r.Context()).Where("action IN ?", []string{"create", "update", "delete", "enable", "disable", "import"}).Order("id desc").First(&snapshot).Error; err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "no previous rule publish snapshot"})
+		return
+	}
+	var rules []database.ProtectionRule
+	if err := json.Unmarshal([]byte(snapshot.RulesJSON), &rules); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	runtimeVersion, hotReload, err := s.replaceProtectionRules(r.Context(), "rollback", rules)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	s.recordAuditEvent(r.Context(), "protection_rule", 0, "", "rules", "rollback", snapshot.Version)
+	apiRules := make([]protectionRuleResponse, 0, len(rules))
+	for _, rule := range rules {
+		apiRules = append(apiRules, protectionRuleToAPI(rule, 0, runtimeVersion, hotReload))
+	}
+	writeJSON(w, http.StatusOK, protectionRuleRollbackResponse{
+		Rules:          apiRules,
+		Total:          len(apiRules),
+		RolledBackTo:   snapshot.Version,
+		RuntimeVersion: runtimeVersion,
+		HotReload:      hotReload,
+	})
+}
+
+func (s *Server) protectionRuleTestEngine(payload protectionRuleTestPayload) (detection.Engine, *database.ProtectionRule, []protectionRuleValidationError) {
+	if payload.Rule != nil {
+		rule, errors := validateProtectionRulePayload(*payload.Rule, 0)
+		if len(errors) > 0 {
+			return nil, nil, errors
+		}
+		manager, err := detection.NewManager("", nil, nil, false)
+		if err != nil {
+			return nil, nil, []protectionRuleValidationError{{Message: err.Error()}}
+		}
+		if err := manager.UpsertRuntimeRule(protectionRuleToDetection(rule)); err != nil {
+			return nil, nil, []protectionRuleValidationError{{Message: err.Error()}}
+		}
+		return manager, &rule, nil
+	}
+	if s.detectionEngine == nil {
+		manager, err := detection.NewManager("", nil, nil, false)
+		if err != nil {
+			return nil, nil, []protectionRuleValidationError{{Message: err.Error()}}
+		}
+		return manager, nil, nil
+	}
+	manager, err := detection.NewManager("", nil, nil, false)
+	if err != nil {
+		return nil, nil, []protectionRuleValidationError{{Message: err.Error()}}
+	}
+	for _, rule := range s.detectionEngine.Rules() {
+		if err := manager.UpsertRuntimeRule(rule); err != nil {
+			return nil, nil, []protectionRuleValidationError{{Message: err.Error()}}
+		}
+	}
+	return manager, nil, nil
+}
+
+func decodeSingleProtectionRulePayload(body io.Reader) (*protectionRulePayload, []protectionRuleValidationError) {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	var payload protectionRulePayload
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, []protectionRuleValidationError{{Field: "body", Line: 1, Message: "invalid json"}}
+	}
+	return &payload, nil
+}
+
+func decodeProtectionRuleValidationBody(body io.Reader) ([]database.ProtectionRule, []protectionRuleValidationError, bool) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, []protectionRuleValidationError{{Field: "body", Line: 1, Message: err.Error()}}, true
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, []protectionRuleValidationError{{Field: "body", Line: 1, Message: "rule payload is required"}}, true
+	}
+	if trimmed[0] == '[' {
+		return decodeProtectionRuleList(bytes.NewReader(trimmed))
+	}
+	payload, errors := decodeSingleProtectionRulePayload(bytes.NewReader(trimmed))
+	if len(errors) > 0 {
+		return nil, errors, true
+	}
+	rule, validationErrors := validateProtectionRulePayload(*payload, 0)
+	for i := range validationErrors {
+		if validationErrors[i].Line == 0 {
+			validationErrors[i].Line = 1
+		}
+	}
+	if len(validationErrors) > 0 {
+		return nil, validationErrors, false
+	}
+	return []database.ProtectionRule{rule}, nil, false
+}
+
+func decodeProtectionRuleList(body io.Reader) ([]database.ProtectionRule, []protectionRuleValidationError, bool) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, []protectionRuleValidationError{{Message: err.Error()}}, true
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var payloads []protectionRulePayload
+	if err := decoder.Decode(&payloads); err != nil {
+		return nil, []protectionRuleValidationError{{Field: "body", Line: 1, Message: "invalid json"}}, true
+	}
+	rules := make([]database.ProtectionRule, 0, len(payloads))
+	errors := make([]protectionRuleValidationError, 0)
+	seenRuleIDs := make(map[int]int, len(payloads))
+	for idx, payload := range payloads {
+		rule, validationErrors := validateProtectionRulePayload(payload, 0)
+		for _, validationError := range validationErrors {
+			validationError.Line = idx + 1
+			errors = append(errors, validationError)
+		}
+		if len(validationErrors) > 0 {
+			continue
+		}
+		if firstLine, ok := seenRuleIDs[rule.RuleID]; ok {
+			errors = append(errors, protectionRuleValidationError{Field: "ruleId", Line: idx + 1, Message: fmt.Sprintf("duplicate ruleId already used at line %d", firstLine)})
+			continue
+		}
+		seenRuleIDs[rule.RuleID] = idx + 1
+		rules = append(rules, rule)
+	}
+	if len(payloads) == 0 {
+		errors = append(errors, protectionRuleValidationError{Field: "rules", Line: 1, Message: "rule list is required"})
+	}
+	return rules, errors, false
+}
+
+func validateProtectionRulePayload(payload protectionRulePayload, id uint) (database.ProtectionRule, []protectionRuleValidationError) {
+	rule, err := payload.toModel(id)
+	if err != nil {
+		field := "body"
+		switch {
+		case strings.Contains(err.Error(), "ruleId"):
+			field = "ruleId"
+		case strings.Contains(err.Error(), "variable"):
+			field = "variable"
+		case strings.Contains(err.Error(), "operator"):
+			field = "operator"
+		case strings.Contains(err.Error(), "pattern"):
+			field = "pattern"
+		case strings.Contains(err.Error(), "action"):
+			field = "action"
+		case strings.Contains(err.Error(), "source"):
+			field = "source"
+		}
+		return rule, []protectionRuleValidationError{{Field: field, Line: 1, Message: err.Error()}}
+	}
+	errors := make([]protectionRuleValidationError, 0)
+	if strings.TrimSpace(payload.Variable) == "" {
+		errors = append(errors, protectionRuleValidationError{Field: "variable", Message: "variable is required"})
+	}
+	switch strings.TrimSpace(payload.Variable) {
+	case "ARGS", "ARGS_NAMES", "REQUEST_URI", "REQUEST_HEADERS", "REQUEST_METHOD", "REQUEST_BODY", "BODY", "REQUEST_HEADERS:User-Agent":
+	default:
+		errors = append(errors, protectionRuleValidationError{Field: "variable", Message: "unsupported variable"})
+	}
+	switch strings.TrimSpace(payload.Operator) {
+	case "@contains", "@streq", "@rx":
+	default:
+		errors = append(errors, protectionRuleValidationError{Field: "operator", Message: "unsupported operator"})
+	}
+	if payload.Score <= 0 {
+		errors = append(errors, protectionRuleValidationError{Field: "score", Message: "score must be greater than 0"})
+	}
+	if len([]rune(rule.Pattern)) > 2048 {
+		errors = append(errors, protectionRuleValidationError{Field: "pattern", Message: "pattern exceeds 2048 characters"})
+	}
+	if strings.TrimSpace(rule.Source) != "" && rule.Source != "custom" {
+		errors = append(errors, protectionRuleValidationError{Field: "source", Message: "only custom rules can be managed here"})
+	}
+	if strings.TrimSpace(rule.Category) == "" {
+		errors = append(errors, protectionRuleValidationError{Field: "category", Message: "category is required"})
+	}
+	return rule, errors
+}
+
+func (s *Server) persistProtectionRuleChange(ctx context.Context, action string, mutate func(tx *gorm.DB) error, rules []database.ProtectionRule) (string, bool, error) {
+	snapshot, err := s.snapshotProtectionRules(ctx, action)
+	if err != nil {
+		return "", false, err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := mutate(tx); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return "", false, err
+	}
+	runtimeVersion, hotReload, err := s.reloadProtectionRuleState(ctx)
+	if err != nil {
+		if restoreErr := s.restoreProtectionRulesFromSnapshot(ctx, snapshot); restoreErr != nil {
+			return "", false, fmt.Errorf("reload protection rules: %w; restore snapshot: %v", err, restoreErr)
+		}
+		return "", false, err
+	}
+	return runtimeVersion, hotReload, nil
+}
+
+func (s *Server) replaceProtectionRules(ctx context.Context, action string, rules []database.ProtectionRule) (string, bool, error) {
+	snapshot, err := s.snapshotProtectionRules(ctx, action)
+	if err != nil {
+		return "", false, err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&database.ProtectionRule{}).Error; err != nil {
+			return err
+		}
+		for i := range rules {
+			rules[i].ID = 0
+			if err := tx.Create(&rules[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return "", false, err
+	}
+	runtimeVersion, hotReload, err := s.reloadProtectionRuleState(ctx)
+	if err != nil {
+		if restoreErr := s.restoreProtectionRulesFromSnapshot(ctx, snapshot); restoreErr != nil {
+			return "", false, fmt.Errorf("reload protection rules: %w; restore snapshot: %v", err, restoreErr)
+		}
+		return "", false, err
+	}
+	return runtimeVersion, hotReload, nil
+}
+
+func (s *Server) replaceCustomProtectionRules(ctx context.Context, action string, rules []database.ProtectionRule) (string, bool, error) {
+	snapshot, err := s.snapshotProtectionRules(ctx, action)
+	if err != nil {
+		return "", false, err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("source = ?", "custom").Delete(&database.ProtectionRule{}).Error; err != nil {
+			return err
+		}
+		for i := range rules {
+			rules[i].ID = 0
+			rules[i].Source = "custom"
+			if err := tx.Create(&rules[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return "", false, err
+	}
+	runtimeVersion, hotReload, err := s.reloadProtectionRuleState(ctx)
+	if err != nil {
+		if restoreErr := s.restoreProtectionRulesFromSnapshot(ctx, snapshot); restoreErr != nil {
+			return "", false, fmt.Errorf("reload protection rules: %w; restore snapshot: %v", err, restoreErr)
+		}
+		return "", false, err
+	}
+	return runtimeVersion, hotReload, nil
+}
+
+func (s *Server) snapshotProtectionRules(ctx context.Context, action string) (database.ProtectionRulePublishSnapshot, error) {
+	var existing []database.ProtectionRule
+	if err := s.db.WithContext(ctx).Order("rule_id asc").Find(&existing).Error; err != nil {
+		return database.ProtectionRulePublishSnapshot{}, err
+	}
+	data, err := json.Marshal(existing)
+	if err != nil {
+		return database.ProtectionRulePublishSnapshot{}, err
+	}
+	snapshot := database.ProtectionRulePublishSnapshot{
+		Version:        fmt.Sprintf("rules-%d", time.Now().UnixMilli()),
+		Action:         action,
+		RuleCount:      len(existing),
+		RuntimeVersion: currentProtectionRuleRuntimeVersion(),
+		HotReload:      s.detectionEngine != nil,
+		RulesJSON:      string(data),
+	}
+	if err := s.db.WithContext(ctx).Create(&snapshot).Error; err != nil {
+		return database.ProtectionRulePublishSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func (s *Server) restoreProtectionRulesFromSnapshot(ctx context.Context, snapshot database.ProtectionRulePublishSnapshot) error {
+	var rules []database.ProtectionRule
+	if err := json.Unmarshal([]byte(snapshot.RulesJSON), &rules); err != nil {
+		return err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&database.ProtectionRule{}).Error; err != nil {
+			return err
+		}
+		for i := range rules {
+			rules[i].ID = 0
+			if err := tx.Create(&rules[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	_, _, err := s.reloadProtectionRuleState(ctx)
+	return err
+}
+
+func (s *Server) reloadProtectionRuleState(ctx context.Context) (string, bool, error) {
+	if err := s.reloadProtectionRules(ctx); err != nil {
+		return "", false, err
+	}
+	return currentProtectionRuleRuntimeVersion(), s.detectionEngine != nil, nil
+}
+
+func currentProtectionRuleRuntimeVersion() string {
+	return fmt.Sprintf("rules-%d", time.Now().UnixMilli())
+}
+
+func (s *Server) ruleHitsByRuleID(ctx context.Context) map[int]int64 {
+	if s == nil || s.db == nil {
+		return map[int]int64{}
+	}
+	type hitRow struct {
+		RuleID string
+		Count  int64
+	}
+	var rows []hitRow
+	if err := s.db.WithContext(ctx).
+		Model(&database.AttackLog{}).
+		Select("rule_id, count(*) as count").
+		Where("rule_id IS NOT NULL AND rule_id <> ''").
+		Group("rule_id").
+		Scan(&rows).Error; err != nil {
+		return map[int]int64{}
+	}
+	out := make(map[int]int64, len(rows))
+	for _, row := range rows {
+		id, err := strconv.Atoi(strings.TrimSpace(row.RuleID))
+		if err != nil {
+			continue
+		}
+		out[id] = row.Count
+	}
+	return out
 }
 
 func parseProtectionRuleAction(suffix string) (uint, string, bool, error) {
@@ -2155,11 +2742,29 @@ func (p protectionRulePayload) merge(existing database.ProtectionRule) (database
 	next.CreatedAt = existing.CreatedAt
 	return next, nil
 }
-func protectionRuleToAPI(rule database.ProtectionRule) protectionRuleResponse {
-	return protectionRuleResponse{ID: fmt.Sprintf("%d", rule.ID), RuleID: fmt.Sprintf("%d", rule.RuleID), Name: rule.Name, Description: rule.Description, Category: rule.Category, Variable: rule.Variable, Operator: rule.Operator, Pattern: rule.Pattern, Severity: rule.Severity, Score: rule.Score, Action: rule.Action, Source: firstNonEmpty(rule.Source, "custom"), Enabled: rule.Enabled, UpdatedAt: formatMillis(rule.UpdatedAt)}
+func protectionRuleToAPI(rule database.ProtectionRule, hits int64, runtimeVersion string, hotReload bool) protectionRuleResponse {
+	return protectionRuleResponse{
+		ID:             fmt.Sprintf("%d", rule.ID),
+		RuleID:         fmt.Sprintf("%d", rule.RuleID),
+		Name:           rule.Name,
+		Description:    rule.Description,
+		Category:       rule.Category,
+		Variable:       rule.Variable,
+		Operator:       rule.Operator,
+		Pattern:        rule.Pattern,
+		Severity:       rule.Severity,
+		Score:          rule.Score,
+		Action:         rule.Action,
+		Source:         firstNonEmpty(rule.Source, "custom"),
+		Enabled:        rule.Enabled,
+		Hits:           hits,
+		RuntimeVersion: runtimeVersion,
+		HotReload:      hotReload,
+		UpdatedAt:      formatMillis(rule.UpdatedAt),
+	}
 }
-func protectionDetectionRuleToAPI(rule detection.Rule) protectionRuleResponse {
-	return protectionRuleResponse{ID: fmt.Sprintf("runtime-%d", rule.ID), RuleID: fmt.Sprintf("%d", rule.ID), Name: rule.Message, Description: rule.Message, Category: rule.Group, Variable: rule.Variable, Operator: rule.Operator, Pattern: rule.Pattern, Severity: rule.Severity, Score: rule.Score, Action: string(rule.Action), Source: firstNonEmpty(rule.Source, "crs"), Enabled: rule.Enabled}
+func protectionDetectionRuleToAPI(rule detection.Rule, runtimeVersion string, hotReload bool) protectionRuleResponse {
+	return protectionRuleResponse{ID: fmt.Sprintf("runtime-%d", rule.ID), RuleID: fmt.Sprintf("%d", rule.ID), Name: rule.Message, Description: rule.Message, Category: rule.Group, Variable: rule.Variable, Operator: rule.Operator, Pattern: rule.Pattern, Severity: rule.Severity, Score: rule.Score, Action: string(rule.Action), Source: firstNonEmpty(rule.Source, "crs"), Enabled: rule.Enabled, RuntimeVersion: runtimeVersion, HotReload: hotReload}
 }
 func protectionRuleToDetection(rule database.ProtectionRule) detection.Rule {
 	return detection.Rule{ID: rule.RuleID, Phase: 2, Group: rule.Category, Variable: rule.Variable, Operator: rule.Operator, Pattern: rule.Pattern, Action: detection.RuleAction(rule.Action), Message: rule.Name, Severity: rule.Severity, Score: rule.Score, Source: rule.Source, Enabled: rule.Enabled}

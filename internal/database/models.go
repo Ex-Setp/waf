@@ -274,6 +274,17 @@ type ProtectionRule struct {
 	UpdatedAt   int64  `gorm:"autoUpdateTime:milli" json:"updatedAt"`
 }
 
+type ProtectionRulePublishSnapshot struct {
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	Version        string `gorm:"size:64;index;not null" json:"version"`
+	Action         string `gorm:"size:32;index;not null" json:"action"`
+	RuleCount      int    `gorm:"not null;default:0" json:"ruleCount"`
+	RuntimeVersion string `gorm:"size:64" json:"runtimeVersion"`
+	HotReload      bool   `gorm:"not null;default:false" json:"hotReload"`
+	RulesJSON      string `gorm:"type:text;not null" json:"rulesJson"`
+	CreatedAt      int64  `gorm:"autoCreateTime:milli;index" json:"createdAt"`
+}
+
 type SiteProtectionPolicy struct {
 	ID                    uint   `gorm:"primaryKey" json:"id"`
 	SiteID                uint   `gorm:"uniqueIndex;not null" json:"siteId"`

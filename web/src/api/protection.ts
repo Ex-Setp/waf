@@ -11,6 +11,8 @@ export interface ApiListResponse<T> {
   events?: T[]
   trend?: T[]
   total?: number
+  runtimeVersion?: string
+  hotReload?: boolean
 }
 
 export interface SiteProtectionPolicy {
@@ -101,6 +103,9 @@ export interface ProtectionRule {
   action?: string
   enabled?: boolean
   source?: string
+  hits?: number
+  runtimeVersion?: string
+  hotReload?: boolean
   groupId?: number | string
   siteId?: number | string
   updatedAt?: string | number
@@ -119,6 +124,42 @@ export interface ProtectionRulePayload {
   action: string
   source: string
   enabled: boolean
+}
+
+export interface ProtectionRuleValidationError {
+  field?: string
+  line?: number
+  message: string
+}
+
+export interface ProtectionRuleValidationResult {
+  valid?: boolean
+  errors?: ProtectionRuleValidationError[]
+  runtimeVersion?: string
+  hotReload?: boolean
+}
+
+export interface ProtectionRuleWriteResult {
+  rule?: ProtectionRule
+  runtimeVersion?: string
+  hotReload?: boolean
+}
+
+export interface ProtectionRuleImportResult {
+  rules?: ProtectionRule[]
+  total?: number
+  valid?: boolean
+  errors?: ProtectionRuleValidationError[]
+  runtimeVersion?: string
+  hotReload?: boolean
+}
+
+export interface ProtectionRuleRollbackResult {
+  rules?: ProtectionRule[]
+  total?: number
+  rolledBackTo?: string
+  runtimeVersion?: string
+  hotReload?: boolean
 }
 
 export interface ProtectionWhitelist {
@@ -341,19 +382,28 @@ export async function fetchSecurityCoverage(): Promise<SecurityCoverageSummary> 
   return data
 }
 
-export async function fetchProtectionRules(): Promise<{ items: ProtectionRule[]; total: number }> {
+export async function fetchProtectionRules(): Promise<{ items: ProtectionRule[]; total: number; runtimeVersion?: string; hotReload?: boolean }> {
   const { data } = await http.get<ProtectionRule[] | ApiListResponse<ProtectionRule>>('/protection/rules')
-  return normalizeArrayResponse(data, ['rules'])
+  const normalized = normalizeArrayResponse(data, ['rules'])
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const out: { items: ProtectionRule[]; total: number; runtimeVersion?: string; hotReload?: boolean } = { ...normalized }
+    const runtimeVersion = (data as ApiListResponse<ProtectionRule>).runtimeVersion
+    const hotReload = (data as ApiListResponse<ProtectionRule>).hotReload
+    if (runtimeVersion !== undefined) out.runtimeVersion = runtimeVersion
+    if (hotReload !== undefined) out.hotReload = hotReload
+    return out
+  }
+  return normalized
 }
 
 export async function createProtectionRule(payload: ProtectionRulePayload): Promise<ProtectionRule> {
-  const { data } = await http.post<ProtectionRule>('/protection/rules', payload)
-  return data
+  const { data } = await http.post<ProtectionRule | ProtectionRuleWriteResult>('/protection/rules', payload)
+  return (data as ProtectionRuleWriteResult).rule ?? (data as ProtectionRule)
 }
 
 export async function updateProtectionRule(id: number | string, payload: ProtectionRulePayload): Promise<ProtectionRule> {
-  const { data } = await http.put<ProtectionRule>(`/protection/rules/${id}`, payload)
-  return data
+  const { data } = await http.put<ProtectionRule | ProtectionRuleWriteResult>(`/protection/rules/${id}`, payload)
+  return (data as ProtectionRuleWriteResult).rule ?? (data as ProtectionRule)
 }
 
 export async function deleteProtectionRule(id: number | string): Promise<void> {
@@ -361,7 +411,32 @@ export async function deleteProtectionRule(id: number | string): Promise<void> {
 }
 
 export async function setProtectionRuleEnabled(id: number | string, enabled: boolean): Promise<ProtectionRule> {
-  const { data } = await http.post<ProtectionRule>(`/protection/rules/${id}/${enabled ? 'enable' : 'disable'}`)
+  const { data } = await http.post<ProtectionRule | ProtectionRuleWriteResult>(`/protection/rules/${id}/${enabled ? 'enable' : 'disable'}`)
+  return (data as ProtectionRuleWriteResult).rule ?? (data as ProtectionRule)
+}
+
+export async function validateProtectionRules(payload: ProtectionRulePayload[]): Promise<ProtectionRuleValidationResult> {
+  const { data } = await http.post<ProtectionRuleValidationResult>('/protection/rules/validate', payload)
+  return data
+}
+
+export async function testProtectionRule(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const { data } = await http.post<Record<string, unknown>>('/protection/rules/test', payload)
+  return data
+}
+
+export async function importProtectionRules(payload: ProtectionRulePayload[]): Promise<ProtectionRuleImportResult> {
+  const { data } = await http.post<ProtectionRuleImportResult>('/protection/rules/import', payload)
+  return data
+}
+
+export async function exportProtectionRules(): Promise<ProtectionRule[]> {
+  const { data } = await http.get<ProtectionRule[] | ApiListResponse<ProtectionRule>>('/protection/rules/export')
+  return normalizeArrayResponse(data, ['rules']).items
+}
+
+export async function rollbackProtectionRules(): Promise<ProtectionRuleRollbackResult> {
+  const { data } = await http.post<ProtectionRuleRollbackResult>('/protection/rules/rollback')
   return data
 }
 

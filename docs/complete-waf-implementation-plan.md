@@ -2659,10 +2659,27 @@ cd web && npm run build
 
 **验收：**
 
-- [ ] 单条规则禁用后，同 payload 不再命中该规则。
-- [ ] 修改规则 score/动作后，真实请求决策随之变化。
-- [ ] 导入错误规则不会污染 runtime，前端显示校验错误。
-- [ ] 规则回滚后恢复旧行为，并写审计日志。
+- [x] 单条规则禁用后，同 payload 不再命中该规则。
+- [x] 修改规则 score/动作后，真实请求决策随之变化。
+- [x] 导入错误规则不会污染 runtime，前端显示校验错误。
+- [x] 规则回滚后恢复旧行为，并写审计日志。
+
+**T150 本轮落地：**
+
+- `internal/httpserver/console_api.go` 扩展 `/api/protection/rules` 产品化操作：`validate`、`test`、`import`、`export`、`rollback`，并在 create/update/enable/disable/import/rollback 后返回 `runtimeVersion` 与 `hotReload` 状态。
+- 新增 `database.ProtectionRulePublishSnapshot` 并加入 AutoMigrate，用于规则发布前快照和上一个规则版本回滚；回滚恢复旧规则表与 detection runtime，并写 `protection_rule` 审计事件。
+- 规则导入/校验走结构化错误 `{field,line,message}`；错误规则不写 DB、不触发 runtime 污染；导入成功只替换 custom 规则并热更新 detection。
+- 规则列表补充按 `AttackLog.rule_id` 聚合的命中次数，前端规则表展示命中、运行版本、热更新状态。
+- `web/src/api/protection.ts` 与 `web/src/views/ProtectionConfigView.vue` 接入规则校验、JSON 导入/导出、回滚、runtime version/hot reload 展示，保存按钮明确为“保存并热更新”。
+- 新增 `internal/httpserver/t150_rule_productization_test.go`：覆盖无效导入不污染 DB/runtime、导入导出、score/action 真实影响请求、回滚恢复旧行为与审计、命中统计。
+
+**验证命令：**
+
+- `GOCACHE="$PWD/.gocache" go test ./internal/httpserver -run 'TestT150|TestProtectionRuleCRUDHotReloadAndAudit' -count=1` 通过。
+- `GOCACHE="$PWD/.gocache" go test ./internal/database ./internal/httpserver -count=1` 通过。
+- `cd web && npm run build` 通过（仅既有 Rollup pure annotation 与 chunk-size 警告）。
+
+**下一任务：** T151：高级语义检测与绕过样本增强。
 
 #### T151：高级语义检测与绕过样本增强
 
